@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>포스터용 도식</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;800&display=swap">
+<!-- 포스터용 그림 원본. 브라우저로 열어 캡처하거나, 문구·숫자를 고친 뒤 다시 캡처하세요. -->
+<style>
+  /* 웹사이트·앱과 같은 체계: 여유(청) → 보통(모래) → 혼잡(주홍), 불가는 슬레이트 링 */
+  :root { --blue:#22678a; --green:#22678a; --amber:#c8b27a; --red:#d24d27; --gray:#33403a;
+          --ink:#18221e; --sub:#4c5953; --line:#d4dbd7; --bg:#ffffff; --ground:#f4f6f5;
+          --display:"Noto Sans KR",sans-serif; }
+  * { box-sizing:border-box; }
+  body { word-break:keep-all; margin:0; background:#ffffff; font-family:'Noto Sans KR','Noto Sans CJK KR',sans-serif; color:var(--ink); }
+  .fig { width:1600px; background:var(--bg); padding:48px 56px; margin:24px auto; }
+  .eyebrow { font-size:18px; font-weight:800; letter-spacing:.1em; color:var(--blue); }
+  h2 { font-family:var(--display); font-weight:800; letter-spacing:-.02em; font-size:42px; margin:0 0 30px; }
+
+  /* 1. 시스템 구조 */
+  .flow { display:grid; grid-template-columns: repeat(7, 1fr); gap:0; align-items:stretch; }
+  .step { position:relative; border:2px solid var(--line); border-radius:18px; padding:20px 16px 18px; margin-right:34px; background:#fff; }
+  .step:last-child { margin-right:0; }
+  .step:not(:last-child)::after { content:""; position:absolute; right:-30px; top:50%; width:22px; height:22px;
+      border-top:3px solid var(--sub); border-right:3px solid var(--sub); transform:translateY(-50%) rotate(45deg); }
+  .num { display:inline-flex; width:34px; height:34px; border-radius:50%; background:var(--ink); color:var(--bg);
+         align-items:center; justify-content:center; font-weight:800; font-size:17px; }
+  .step h3 { font-family:var(--display); font-weight:800; letter-spacing:-.02em; font-size:23px; margin:12px 0 8px; }
+  .step p { font-size:15.5px; line-height:1.55; color:var(--sub); margin:0; }
+  .step.src { background:#dce9f0; border-color:#b9d1de; }
+  .step.out { background:var(--ink); border-color:var(--ink); }
+  .step.out .num { background:var(--bg); color:var(--ink); }
+  .step.out h3, .step.out p { color:#fff; }
+  .step.out p { color:#cbd5e1; }
+  .tags { display:flex; gap:10px; margin-top:28px; flex-wrap:wrap; }
+  .tag { font-size:15px; padding:6px 12px; border-radius:3px; background:var(--ground); color:var(--sub); font-weight:600; }
+
+  /* 2. 요금 알고리즘 */
+  .formula { display:flex; align-items:center; gap:18px; font-size:28px; font-family:var(--display); font-weight:800; letter-spacing:-.02em; margin-bottom:34px; flex-wrap:wrap; }
+  .term { border:2px solid var(--ink); border-radius:6px; padding:14px 22px; text-align:center; font-weight:800; }
+  .term small { display:block; font-family:"Noto Sans KR",sans-serif; font-size:15px; font-weight:500; color:var(--sub); margin-top:4px; }
+  .term.main { background:var(--ink); color:#fff; }
+  .term.main small { color:#c3ccc7; }
+  .op { font-family:"Noto Sans KR",sans-serif; font-size:34px; color:var(--sub); font-weight:500; }
+  .grid2 { display:grid; grid-template-columns: 1.15fr 1fr; gap:40px; }
+  .rules { display:flex; flex-direction:column; gap:12px; }
+  .rule { display:grid; grid-template-columns: 150px 1fr 120px; align-items:center; border-radius:14px; padding:16px 20px;
+          border:2px solid var(--line); font-size:19px; }
+  .rule b.st { font-size:22px; font-weight:700; display:flex; align-items:center; gap:10px; }
+  .rule b.st i { width:16px; height:16px; border-radius:50%; background:currentColor; display:inline-block; }
+  .r-gray b.st i { background:transparent; box-shadow: inset 0 0 0 3px currentColor; }
+  .rule .cond { color:var(--sub); }
+  .rule .mul { font-size:24px; font-weight:700; text-align:right; font-variant-numeric:tabular-nums; }
+  .r-green { border-color:#c4d9e4; background:#e7f0f5; } .r-green b, .r-green .mul { color:var(--green); }
+  .r-amber { border-color:#e3d8b8; background:#f5f0e2; } .r-amber b, .r-amber .mul { color:#8a7438; }
+  .r-red { border-color:#efc4b5; background:#f9e7e0; } .r-red b, .r-red .mul { color:var(--red); }
+  .r-gray { border-color:var(--line); background:var(--ground); } .r-gray b, .r-gray .mul { color:var(--gray); }
+  .note { font-size:16px; color:var(--sub); margin-top:14px; line-height:1.6; }
+  .ex h4 { font-size:21px; margin:0 0 12px; font-weight:700; }
+  .bars { display:flex; align-items:flex-end; gap:22px; height:270px; padding:0 10px; border-bottom:3px solid var(--ink); }
+  .bar { flex:1; border-radius:10px 10px 0 0; position:relative; display:flex; justify-content:center; }
+  .bar span { position:absolute; top:-38px; font-size:26px; font-family:var(--display); font-weight:800; font-variant-numeric:tabular-nums; }
+  .bar-lbl { display:flex; gap:22px; padding:10px 10px 0; }
+  .bar-lbl div { flex:1; text-align:center; font-size:17px; font-weight:700; color:var(--sub); }
+  .redirect { margin-top:26px; border-radius:6px; padding:16px 20px; background:#e7f0f5; border:0; font-size:18px; line-height:1.6; }
+  .redirect b { color:var(--blue); }
+</style>
+</head>
+<body>
+
+<section class="fig" id="fig-architecture">
+  <h2>공공 데이터 → 혼잡도 판정 → 동적 요금 → 수요 분산 안내</h2>
+  <div class="flow">
+    <div class="step src"><span class="num">1</span><h3>공공 API</h3>
+      <p>한국환경공단<br>전기차 충전기 정보<br>충전기 1대 = 1행<br>상태코드·출력·위치</p></div>
+    <div class="step"><span class="num">2</span><h3>수집</h3>
+      <p>시·군별 전 페이지 순회<br>실패 시 스냅샷 → 데모로 자동 대체</p></div>
+    <div class="step"><span class="num">3</span><h3>정제</h3>
+      <p>삭제·이용제한·좌표 이상치 제거<br>급속 / 완속 분류</p></div>
+    <div class="step"><span class="num">4</span><h3>혼잡도 판정</h3>
+      <p>충전소 × 속도별<br>대기율 계산<br>여유·보통·혼잡·불가</p></div>
+    <div class="step"><span class="num">5</span><h3>동적 요금</h3>
+      <p>출력 구간 기본단가<br>× 혼잡 배수<br>× 시간대 배수</p></div>
+    <div class="step"><span class="num">6</span><h3>대체 거점</h3>
+      <p>반경 내 가장 가까운<br>같은 속도 여유 거점 추천</p></div>
+    <div class="step out"><span class="num">7</span><h3>관제 대시보드</h3>
+      <p>지도·KPI·분석<br>정책 변수 실시간 시뮬레이션</p></div>
+  </div>
+  <div class="tags">
+    <span class="tag">Python, Streamlit</span><span class="tag">Folium 지도</span><span class="tag">Altair 차트</span>
+    <span class="tag">pandas 집계</span><span class="tag">pytest 단위 테스트</span><span class="tag">충북 11개 시·군</span>
+  </div>
+</section>
+
+<section class="fig" id="fig-pricing">
+  <h2>비어 있는 곳은 싸게, 붐비는 곳은 비싸게</h2>
+  <div class="formula">
+    <div class="term main">동적 단가<small>원/kWh</small></div><span class="op">=</span>
+    <div class="term">기본 단가<small>충전기 출력 구간별</small></div><span class="op">×</span>
+    <div class="term">혼잡 배수<small>대기율로 판정</small></div><span class="op">×</span>
+    <div class="term">시간대 배수<small>선택, 확장용 변수</small></div>
+  </div>
+  <div class="grid2">
+    <div>
+      <div class="rules">
+        <div class="rule r-green"><b class="st"><i></i>여유</b><span class="cond">대기율 ≥ 50%</span><span class="mul">× 0.80</span></div>
+        <div class="rule r-amber"><b class="st"><i></i>보통</b><span class="cond">대기 1대 이상</span><span class="mul">× 1.00</span></div>
+        <div class="rule r-red"><b class="st"><i></i>혼잡</b><span class="cond">대기 0대 · 전부 충전 중</span><span class="mul">× 1.15</span></div>
+        <div class="rule r-gray"><b class="st"><i></i>불가</b><span class="cond">고장·점검·운영중지</span><span class="mul">미산정</span></div>
+      </div>
+      <div class="note">대기율 = 대기 ÷ (대기 + 충전 중). 고장 충전기는 분모에서 뺍니다.<br>
+        급속과 완속을 따로 판정하고, 기준·할인율·할증율은 대시보드에서 바로 조정합니다.</div>
+    </div>
+    <div class="ex">
+      <h4>예시: 100kW 급속, 기본 단가 347.2원</h4>
+      <div class="bars">
+        <div class="bar" style="height:64%;background:var(--green)"><span style="color:var(--green)">277.8</span></div>
+        <div class="bar" style="height:80%;background:var(--amber)"><span style="color:#8a7438">347.2</span></div>
+        <div class="bar" style="height:92%;background:var(--red)"><span style="color:var(--red)">399.3</span></div>
+      </div>
+      <div class="bar-lbl"><div>여유</div><div>보통</div><div>혼잡</div></div>
+      <div class="redirect">같은 100kW 충전기라도 혼잡한 곳은 399.3원, 여유로운 곳은 277.8원입니다.
+        혼잡 거점 이용자에게 반경 3km 안의 <b>급속 여유 거점</b>을 안내해 <b>kWh당 121.5원</b> 차이로 수요를 옮깁니다.</div>
+    </div>
+  </div>
+</section>
+
+</body>
+</html>

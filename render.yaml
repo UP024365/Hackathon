@@ -1,0 +1,22 @@
+# Render(render.com) 무료 웹 서비스 배포 설정
+# Render 대시보드 > New > Blueprint > 이 저장소 선택 → EV_API_KEY 값만 입력하면 됩니다.
+services:
+  - type: web
+    name: chungbuk-ev
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements-server.txt
+    # 캐시를 한 프로세스에서 공유하도록 워커 1개 + 스레드
+    startCommand: gunicorn server:app --workers 1 --threads 8 --timeout 120
+    healthCheckPath: /api/health
+    envVars:
+      - key: EV_API_KEY
+        sync: false
+      # 서버가 켜져 있는 동안 10분마다 기록. 무료 플랜은 잠들거나 재시작하면 서버 쪽 기록이 사라지므로
+      # 상시 기록은 GitHub Actions(.github/workflows/deploy.yml)로 쌓고 아래 HISTORY_URL로 읽는 것을 권장
+      - key: COLLECT_INTERVAL_MIN
+        value: "10"
+      - key: HISTORY_URL
+        sync: false
+      - key: PYTHON_VERSION
+        value: 3.12.7

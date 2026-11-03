@@ -1,0 +1,7 @@
+# 웹사이트 서버(server.py)만 배포할 때 필요한 최소 패키지
+flask>=3.0
+gunicorn>=22.0
+pandas>=2.0
+numpy>=1.26
+requests>=2.31
+python-dotenv>=1.0

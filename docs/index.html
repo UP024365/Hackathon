@@ -1,0 +1,1626 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>충북 EV 요금 관제</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;800&display=swap">
+<style>
+[hidden]{display:none!important}
+/* Layout: 왼쪽은 도로 지도(OpenStreetMap) 위에 충전소를 올린 관제 지도 + 24시간 스크러버, 오른쪽은 지역 요약·요금 정책·거점 상세 패널, 아래는 거점 표.
+   흰 바탕 단일 테마(사용자 요청). 한글은 화면에서 가장 또렷한 Noto Sans KR 한 가족을 굵기로만 위계를 줌. */
+:root {
+  color-scheme: light;
+  --ground: #ffffff;       /* 페이지 바탕: 흰색 */
+  --surface: #ffffff;
+  --land: #f1f3f2;         /* 마우스 올림·선택 배경 */
+  --land-edge: #d9dedb;
+  --map-bg: #f2f3f1;       /* 지도 타일이 오기 전 바탕 */
+  --ink: #17201c;
+  --ink-2: #4a5550;
+  --ink-3: #7d8782;
+  --rule: #e2e6e4;
+  --free: #1f6a8f;         /* 여유: 석유청색 (남는 용량 = 차가운 쪽) */
+  --mid: #c8b27a;          /* 보통: 모래색 (발산 팔레트의 중간) */
+  --busy: #d24d27;         /* 혼잡: 주홍 (압력 = 뜨거운 쪽) */
+  --down: #33403a;         /* 불가: 짙은 슬레이트 링 */
+  --free-soft: #e3eef4;
+  --busy-soft: #fae6de;
+  --font-display: "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  --font-body: "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--ground); color: var(--ink); font: 400 15px/1.55 var(--font-body);
+       padding: 0 16px 24px; -webkit-font-smoothing: antialiased; }
+button, input, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--free); outline-offset: 2px; }
+.num { font-variant-numeric: tabular-nums; }
+
+/* ── 상단 ─────────────────────────────── */
+.top { display: flex; align-items: center; gap: 12px 24px; flex-wrap: wrap; padding: 14px 0 12px; }
+.brand { font-family: var(--font-display); font-size: 26px; line-height: 1; letter-spacing: -.01em; margin: 0; white-space: nowrap; }
+.brand small { font-family: var(--font-body); font-size: 13px; font-weight: 500; color: var(--ink-3); margin-left: 10px; letter-spacing: 0; }
+.regions { display: flex; gap: 2px; overflow-x: auto; flex: 1 1 420px; min-width: 0; scrollbar-width: thin; }
+.regions button { border: 0; background: transparent; padding: 7px 11px; border-radius: 3px; cursor: pointer;
+                  font-size: 14px; color: var(--ink-2); white-space: nowrap; }
+.regions button:hover { background: var(--land); color: var(--ink); }
+.regions button[aria-pressed="true"] { background: var(--ink); color: var(--surface); font-weight: 600; }
+.source { display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; font-size: 13px; color: var(--ink-2); }
+.file-btn { white-space: nowrap; border: 1px dashed var(--ink-3); padding: 6px 10px; border-radius: 3px; cursor: pointer; font-size: 13px; background: transparent; }
+.file-btn:hover { border-style: solid; }
+.file-btn.share { border-style: solid; border-color: var(--ink); color: var(--ink); font-weight: 600; }
+.share-box { margin-top: 10px; padding: 12px 14px; background: var(--land); border-radius: 4px; font-size: 14px; display: grid; gap: 6px; }
+.share-box a { color: var(--free); font-weight: 600; word-break: break-all; }
+.key-box { margin-top: 10px; padding: 12px 14px; background: var(--land); border-radius: 4px; font-size: 14px; display: grid; gap: 8px; }
+.key-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.key-row input { flex: 1 1 200px; min-width: 0; border: 1px solid var(--land-edge); border-radius: 3px; padding: 7px 10px; background: #fff; font-size: 16px; }
+.key-msg { font-size: 13px; color: var(--ink-2); }
+.key-msg.err { color: var(--busy); }
+.share-box img { width: 168px; height: 168px; image-rendering: pixelated; background: #fff; padding: 6px; border-radius: 3px; }
+
+/* ── 본문 그리드 ─────────────────────────── */
+.app { display: grid; grid-template-columns: minmax(0, 1fr) 390px; gap: 16px; height: calc(100% - 64px); min-height: 640px; }
+.map-pane { position: relative; display: flex; flex-direction: column; min-width: 0; background: var(--map-bg);
+            border: 1px solid var(--rule); border-radius: 4px; overflow: hidden; }
+#map { flex: 1 1 auto; width: 100%; min-height: 360px; background: var(--map-bg); font-family: var(--font-body); }
+.leaflet-tile-pane { filter: saturate(.45) contrast(.95) brightness(1.02); }   /* 도로·지명은 보이되 점 색이 묻히지 않게 */
+.leaflet-container a { color: var(--ink-2); }
+.leaflet-tooltip.dtip { background: var(--ink); color: #fff; border: 0; border-radius: 3px; font-size: 13px; padding: 6px 9px; box-shadow: none; }
+.leaflet-tooltip.dtip::before { border-top-color: var(--ink); }
+.leaflet-tooltip.rtip { background: #fff; color: var(--ink-2); border: 1px solid var(--rule); border-radius: 3px; font-size: 12.5px; box-shadow: none; }
+.rlabel { font: 700 12px var(--font-body); color: var(--ink-3); white-space: nowrap; text-shadow: 0 0 3px #fff, 0 0 3px #fff; }
+.rlabel span { position: absolute; transform: translate(-50%, -50%); }
+.arrow-head { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.arrow-head { overflow: visible; }
+.arrow-head path { fill: var(--ink); stroke: #fff; stroke-width: 2; stroke-linejoin: round; paint-order: stroke; }
+.map-tools { position: absolute; top: 10px; right: 10px; display: flex; flex-direction: column; gap: 4px; z-index: 1000; }
+.map-tools button { width: 32px; height: 32px; border: 1px solid var(--rule); background: var(--surface); border-radius: 3px; cursor: pointer; font-size: 17px; line-height: 1; }
+.map-tools button.fit { width: auto; padding: 0 6px; font-size: 13px; }
+.me-note { position: absolute; z-index: 1000; left: 12px; top: 46px; font-size: 13px; color: var(--ink); background: var(--surface);
+           border: 1px solid var(--rule); padding: 6px 10px; border-radius: 4px; max-width: calc(100% - 110px); box-shadow: 0 1px 4px rgb(0 0 0 / 12%); }
+.me-note { display: flex; gap: 8px; align-items: flex-start; }
+.me-note[hidden] { display: none; }
+.me-note button { border: 0; background: none; padding: 0; color: var(--free); font: inherit; font-weight: 600; cursor: pointer; text-decoration: underline; }
+.me-note .me-close { flex: none; color: var(--ink-2); text-decoration: none; font-size: 18px; line-height: 1; padding: 0 2px; margin: -1px -4px 0 0; }
+.me-dot { width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%; background: #2a7de1; border: 3px solid #fff; box-shadow: 0 0 0 2px rgb(42 125 225 / 35%), 0 1px 4px rgb(0 0 0 / 35%); }
+.map-note { position: absolute; z-index: 1000; left: 12px; top: 10px; font-size: 12.5px; color: var(--ink-2); background: color-mix(in srgb, var(--surface) 88%, transparent);
+            padding: 4px 8px; border-radius: 3px; max-width: calc(100% - 70px); }
+
+/* 24시간 스크러버 */
+.timebar { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 18px; align-items: center; padding: 12px 16px 10px;
+           background: var(--surface); border-top: 1px solid var(--rule); }
+.clock { display: flex; flex-direction: row; gap: 12px; align-items: center; }
+.clock .hour { font-family: var(--font-display); font-size: 34px; line-height: 1; min-width: 2.6em; }
+.clock .hour span { font-size: 20px; margin-left: 2px; }
+.play { width: 40px; height: 40px; border: 1px solid var(--ink); background: transparent; border-radius: 50%; padding: 0; cursor: pointer; display: grid; place-items: center; color: var(--ink); }
+.play svg { width: 16px; height: 16px; fill: currentColor; }
+.play[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
+.scrub { position: relative; min-width: 0; }
+.scrub-head { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; color: var(--ink-2); margin-bottom: 2px; }
+.scrub-head b { color: var(--busy); font-weight: 600; }
+#spark { width: 100%; height: 16px; display: block; overflow: visible; }
+#spark .area { fill: var(--busy-soft); }
+#spark .line { fill: none; stroke: var(--busy); stroke-width: 1.6; }
+#spark .band { fill: var(--free-soft); }
+#spark .cursor { stroke: var(--ink); stroke-width: 1.4; }
+#spark .cursor-dot { fill: var(--busy); stroke: var(--surface); stroke-width: 1.5; }
+#spark .tick { font: 11px var(--font-body); fill: var(--ink-3); text-anchor: middle; }
+#spark .avg { fill: none; stroke: var(--ink-3); stroke-width: 1.4; stroke-dasharray: 3 3; }
+#spark .pt { fill: var(--busy); }
+.scrub-head .key { color: var(--ink-3); margin-left: 8px; white-space: nowrap; }
+#hour { width: 100%; margin: 2px 0 0; accent-color: var(--ink); }
+
+/* ── 오른쪽 패널 ─────────────────────────── */
+.panel { background: var(--surface); border: 1px solid var(--rule); border-radius: 4px; overflow-y: auto; min-width: 0; }
+.panel section { padding: 18px 20px; border-bottom: 1px solid var(--rule); }
+.panel section:last-child { border-bottom: 0; }
+.panel h2 { font-family: var(--font-display); font-weight: 400; font-size: 30px; line-height: 1.1; margin: 0; }
+.panel h3 { font-size: 15px; font-weight: 700; margin: 0 0 10px; }
+.sub { font-size: 13px; color: var(--ink-3); margin: 4px 0 0; }
+.status { font-size: 13px; color: var(--ink-2); margin: 6px 0 0; }
+.status:empty { display: none; }
+.status.err { color: var(--busy); }
+.loading { position: absolute; z-index: 1000; inset: 0 0 auto 0; top: 45%; text-align: center; font-size: 14px; color: var(--ink-2); pointer-events: none; }
+.snap-flag { display: inline-block; font-size: 12px; color: var(--ink-2); border: 1px solid currentColor; border-radius: 2px; padding: 0 5px; margin-left: 6px; vertical-align: 2px; }
+
+.stack { display: flex; height: 14px; border-radius: 2px; overflow: hidden; margin: 14px 0 10px; background: var(--land); }
+.stack i { display: block; height: 100%; transition: width .35s ease; }
+.legend { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px 12px; }
+.legend button { display: flex; align-items: center; gap: 8px; border: 0; background: transparent; padding: 3px 0; cursor: pointer; text-align: left; font-size: 14px; }
+.legend button[aria-pressed="false"] { opacity: .38; }
+.legend .sw { width: 11px; height: 11px; border-radius: 50%; flex: none; }
+.legend .cnt { margin-left: auto; font-weight: 600; }
+.sw.s-여유 { background: var(--free); } .sw.s-보통 { background: var(--mid); } .sw.s-혼잡 { background: var(--busy); }
+.sw.s-불가 { background: transparent; box-shadow: inset 0 0 0 2px var(--down); } .sw.s-미확인 { background: transparent; box-shadow: inset 0 0 0 1px var(--ink-3); }
+
+.figs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }
+.fig .v { font-family: var(--font-display); font-size: 26px; line-height: 1.05; }
+.fig .v small { font-family: var(--font-body); font-size: 13px; margin-left: 2px; color: var(--ink-2); }
+.fig .k { font-size: 12.5px; color: var(--ink-3); margin-top: 3px; }
+
+.ctrl { display: grid; gap: 12px; }
+.ctrl label { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; font-size: 14px; align-items: center; }
+.ctrl label output { font-weight: 600; font-variant-numeric: tabular-nums; }
+.ctrl input[type=range] { grid-column: 1 / -1; width: 100%; margin: 0; accent-color: var(--ink); }
+.ctrl .check { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; }
+.ctrl .check input { margin-top: 4px; accent-color: var(--ink); }
+.ctrl .check small { display: block; color: var(--ink-3); font-size: 12.5px; }
+
+table { border-collapse: collapse; width: 100%; }
+.ptable { font-size: 13.5px; margin-top: 14px; }
+.ptable th, .ptable td { padding: 5px 6px; text-align: right; border-bottom: 1px solid var(--rule); }
+.ptable th:first-child, .ptable td:first-child { text-align: left; color: var(--ink-2); }
+.ptable thead th { font-weight: 600; font-size: 12.5px; }
+.c-여유 { color: var(--free); } .c-보통 { color: var(--ink-2); } .c-혼잡 { color: var(--busy); } .c-불가 { color: var(--down); }
+
+.pairs { display: grid; gap: 2px; }
+.pair { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px; text-align: left; border: 0; background: transparent; padding: 8px 10px;
+        margin: 0 -10px; border-radius: 3px; cursor: pointer; font-size: 14px; }
+.pair:hover { background: var(--land); }
+.pair .route { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.pair .route span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pair .route svg { flex: none; }
+.pair .route.to { color: var(--ink-3); }
+.pair .route.to span { color: var(--ink); }
+.pair .meta { font-size: 12.5px; color: var(--ink-3); padding-left: 35px; }
+.dotsw { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.empty { font-size: 13.5px; color: var(--ink-3); margin: 0; }
+
+.detail .chip { display: inline-block; font-size: 12.5px; font-weight: 600; padding: 1px 7px; border-radius: 2px; color: var(--surface); margin-top: 8px; }
+.chip.s-여유 { background: var(--free); } .chip.s-보통 { background: var(--mid); color: var(--ink); } .chip.s-혼잡 { background: var(--busy); }
+.chip.s-불가, .chip.s-미확인 { background: var(--down); }
+.calc { font-size: 13.5px; margin-top: 12px; }
+.calc th, .calc td { padding: 6px 4px; border-bottom: 1px solid var(--rule); text-align: right; }
+.calc th:first-child, .calc td:first-child { text-align: left; }
+.calc thead th { font-weight: 600; font-size: 12.5px; color: var(--ink-2); }
+.alt { margin-top: 12px; padding: 10px 12px; background: var(--free-soft); border-radius: 3px; font-size: 14px; }
+.alt button, .link-btn { border: 0; background: none; padding: 0; color: var(--free); font-weight: 600; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+.detail .close { float: right; border: 0; background: none; font-size: 13px; color: var(--ink-3); cursor: pointer; }
+
+/* ── 아래: 표, 방식 ───────────────────────── */
+.below { display: grid; grid-template-columns: minmax(0, 1fr) 390px; gap: 16px; margin-top: 16px; align-items: start; }
+.card { background: var(--surface); border: 1px solid var(--rule); border-radius: 4px; padding: 18px 20px; min-width: 0; }
+.card h3 { font-family: var(--font-display); font-weight: 400; font-size: 22px; margin: 0; }
+.tbl-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+#q { border: 1px solid var(--land-edge); background: #fff; border-radius: 3px; padding: 6px 10px; width: min(260px, 100%); }
+.tbl-wrap { overflow-x: auto; max-height: 520px; overflow-y: auto; }
+.stbl { font-size: 13.5px; min-width: 760px; }
+.stbl th { position: sticky; top: 0; background: var(--surface); text-align: left; font-weight: 600; font-size: 12.5px; color: var(--ink-2);
+           padding: 8px 8px; border-bottom: 1px solid var(--ink-3); cursor: pointer; white-space: nowrap; user-select: none; }
+.stbl th[aria-sort] { color: var(--ink); }
+.stbl td { padding: 7px 8px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+.stbl td.r, .stbl th.r { text-align: right; }
+.stbl tbody tr { cursor: pointer; }
+.stbl tbody tr:hover { background: var(--land); }
+.stbl tbody tr.on { background: var(--free-soft); }
+.stbl .name { max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
+.method p { margin: 10px 0 0; font-size: 14.5px; color: var(--ink-2); }
+.formula { font-size: 15px; margin: 14px 0 6px; padding: 12px 0; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
+.formula b { font-weight: 700; color: var(--ink); }
+.method ol { padding-left: 18px; margin: 10px 0 0; font-size: 14px; color: var(--ink-2); display: grid; gap: 6px; }
+footer { font-size: 12.5px; color: var(--ink-3); margin-top: 18px; display: grid; gap: 4px; max-width: 900px; }
+
+.brand, .clock .hour, .panel h2, .fig .v, .card h3 { font-weight: 800; letter-spacing: -.02em; }
+.panel h3 { font-weight: 700; }
+@media (max-width: 1080px) {
+  .app { grid-template-columns: minmax(0, 1fr); height: auto; }
+  .map-pane { height: 72vh; min-height: 480px; }
+  .below { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 520px) {
+  .top { gap: 10px; }
+  .brand { font-size: 22px; }
+  .brand small { display: none; }
+  .clock .hour { font-size: 32px; }
+  .figs .v { font-size: 22px; }
+}
+@media (prefers-reduced-motion: reduce) { .stack i { transition: none; } }
+
+/* Leaflet 1.9.4 기본 스타일 */
+.leaflet-pane,
+.leaflet-tile,
+.leaflet-marker-icon,
+.leaflet-marker-shadow,
+.leaflet-tile-container,
+.leaflet-pane > svg,
+.leaflet-pane > canvas,
+.leaflet-zoom-box,
+.leaflet-image-layer,
+.leaflet-layer {
+	position: absolute;
+	left: 0;
+	top: 0;
+	}
+.leaflet-container {
+	overflow: hidden;
+	}
+.leaflet-tile,
+.leaflet-marker-icon,
+.leaflet-marker-shadow {
+	-webkit-user-select: none;
+	   -moz-user-select: none;
+	        user-select: none;
+	  -webkit-user-drag: none;
+	}
+.leaflet-tile::selection {
+	background: transparent;
+}
+.leaflet-safari .leaflet-tile {
+	image-rendering: -webkit-optimize-contrast;
+	}
+.leaflet-safari .leaflet-tile-container {
+	width: 1600px;
+	height: 1600px;
+	-webkit-transform-origin: 0 0;
+	}
+.leaflet-marker-icon,
+.leaflet-marker-shadow {
+	display: block;
+	}
+.leaflet-container .leaflet-overlay-pane svg {
+	max-width: none !important;
+	max-height: none !important;
+	}
+.leaflet-container .leaflet-marker-pane img,
+.leaflet-container .leaflet-shadow-pane img,
+.leaflet-container .leaflet-tile-pane img,
+.leaflet-container img.leaflet-image-layer,
+.leaflet-container .leaflet-tile {
+	max-width: none !important;
+	max-height: none !important;
+	width: auto;
+	padding: 0;
+	}
+.leaflet-container img.leaflet-tile {
+	mix-blend-mode: plus-lighter;
+}
+.leaflet-container.leaflet-touch-zoom {
+	-ms-touch-action: pan-x pan-y;
+	touch-action: pan-x pan-y;
+	}
+.leaflet-container.leaflet-touch-drag {
+	-ms-touch-action: pinch-zoom;
+	touch-action: none;
+	touch-action: pinch-zoom;
+}
+.leaflet-container.leaflet-touch-drag.leaflet-touch-zoom {
+	-ms-touch-action: none;
+	touch-action: none;
+}
+.leaflet-container {
+	-webkit-tap-highlight-color: transparent;
+}
+.leaflet-container a {
+	-webkit-tap-highlight-color: rgba(51, 181, 229, 0.4);
+}
+.leaflet-tile {
+	filter: inherit;
+	visibility: hidden;
+	}
+.leaflet-tile-loaded {
+	visibility: inherit;
+	}
+.leaflet-zoom-box {
+	width: 0;
+	height: 0;
+	-moz-box-sizing: border-box;
+	     box-sizing: border-box;
+	z-index: 800;
+	}
+.leaflet-overlay-pane svg {
+	-moz-user-select: none;
+	}
+.leaflet-pane         { z-index: 400; }
+.leaflet-tile-pane    { z-index: 200; }
+.leaflet-overlay-pane { z-index: 400; }
+.leaflet-shadow-pane  { z-index: 500; }
+.leaflet-marker-pane  { z-index: 600; }
+.leaflet-tooltip-pane   { z-index: 650; }
+.leaflet-popup-pane   { z-index: 700; }
+.leaflet-map-pane canvas { z-index: 100; }
+.leaflet-map-pane svg    { z-index: 200; }
+.leaflet-vml-shape {
+	width: 1px;
+	height: 1px;
+	}
+.lvml {
+	behavior: url(#default#VML);
+	display: inline-block;
+	position: absolute;
+	}
+.leaflet-control {
+	position: relative;
+	z-index: 800;
+	pointer-events: visiblePainted; 
+	pointer-events: auto;
+	}
+.leaflet-top,
+.leaflet-bottom {
+	position: absolute;
+	z-index: 1000;
+	pointer-events: none;
+	}
+.leaflet-top {
+	top: 0;
+	}
+.leaflet-right {
+	right: 0;
+	}
+.leaflet-bottom {
+	bottom: 0;
+	}
+.leaflet-left {
+	left: 0;
+	}
+.leaflet-control {
+	float: left;
+	clear: both;
+	}
+.leaflet-right .leaflet-control {
+	float: right;
+	}
+.leaflet-top .leaflet-control {
+	margin-top: 10px;
+	}
+.leaflet-bottom .leaflet-control {
+	margin-bottom: 10px;
+	}
+.leaflet-left .leaflet-control {
+	margin-left: 10px;
+	}
+.leaflet-right .leaflet-control {
+	margin-right: 10px;
+	}
+.leaflet-fade-anim .leaflet-popup {
+	opacity: 0;
+	-webkit-transition: opacity 0.2s linear;
+	   -moz-transition: opacity 0.2s linear;
+	        transition: opacity 0.2s linear;
+	}
+.leaflet-fade-anim .leaflet-map-pane .leaflet-popup {
+	opacity: 1;
+	}
+.leaflet-zoom-animated {
+	-webkit-transform-origin: 0 0;
+	    -ms-transform-origin: 0 0;
+	        transform-origin: 0 0;
+	}
+svg.leaflet-zoom-animated {
+	will-change: transform;
+}
+.leaflet-zoom-anim .leaflet-zoom-animated {
+	-webkit-transition: -webkit-transform 0.25s cubic-bezier(0,0,0.25,1);
+	   -moz-transition:    -moz-transform 0.25s cubic-bezier(0,0,0.25,1);
+	        transition:         transform 0.25s cubic-bezier(0,0,0.25,1);
+	}
+.leaflet-zoom-anim .leaflet-tile,
+.leaflet-pan-anim .leaflet-tile {
+	-webkit-transition: none;
+	   -moz-transition: none;
+	        transition: none;
+	}
+.leaflet-zoom-anim .leaflet-zoom-hide {
+	visibility: hidden;
+	}
+.leaflet-interactive {
+	cursor: pointer;
+	}
+.leaflet-grab {
+	cursor: -webkit-grab;
+	cursor:    -moz-grab;
+	cursor:         grab;
+	}
+.leaflet-crosshair,
+.leaflet-crosshair .leaflet-interactive {
+	cursor: crosshair;
+	}
+.leaflet-popup-pane,
+.leaflet-control {
+	cursor: auto;
+	}
+.leaflet-dragging .leaflet-grab,
+.leaflet-dragging .leaflet-grab .leaflet-interactive,
+.leaflet-dragging .leaflet-marker-draggable {
+	cursor: move;
+	cursor: -webkit-grabbing;
+	cursor:    -moz-grabbing;
+	cursor:         grabbing;
+	}
+.leaflet-marker-icon,
+.leaflet-marker-shadow,
+.leaflet-image-layer,
+.leaflet-pane > svg path,
+.leaflet-tile-container {
+	pointer-events: none;
+	}
+.leaflet-marker-icon.leaflet-interactive,
+.leaflet-image-layer.leaflet-interactive,
+.leaflet-pane > svg path.leaflet-interactive,
+svg.leaflet-image-layer.leaflet-interactive path {
+	pointer-events: visiblePainted; 
+	pointer-events: auto;
+	}
+.leaflet-container {
+	background: #ddd;
+	outline-offset: 1px;
+	}
+.leaflet-container a {
+	color: #0078A8;
+	}
+.leaflet-zoom-box {
+	border: 2px dotted #38f;
+	background: rgba(255,255,255,0.5);
+	}
+.leaflet-container {
+	font-family: "Helvetica Neue", Arial, Helvetica, sans-serif;
+	font-size: 12px;
+	font-size: 0.75rem;
+	line-height: 1.5;
+	}
+.leaflet-bar {
+	box-shadow: 0 1px 5px rgba(0,0,0,0.65);
+	border-radius: 4px;
+	}
+.leaflet-bar a {
+	background-color: #fff;
+	border-bottom: 1px solid #ccc;
+	width: 26px;
+	height: 26px;
+	line-height: 26px;
+	display: block;
+	text-align: center;
+	text-decoration: none;
+	color: black;
+	}
+.leaflet-bar a,
+.leaflet-control-layers-toggle {
+	background-position: 50% 50%;
+	background-repeat: no-repeat;
+	display: block;
+	}
+.leaflet-bar a:hover,
+.leaflet-bar a:focus {
+	background-color: #f4f4f4;
+	}
+.leaflet-bar a:first-child {
+	border-top-left-radius: 4px;
+	border-top-right-radius: 4px;
+	}
+.leaflet-bar a:last-child {
+	border-bottom-left-radius: 4px;
+	border-bottom-right-radius: 4px;
+	border-bottom: none;
+	}
+.leaflet-bar a.leaflet-disabled {
+	cursor: default;
+	background-color: #f4f4f4;
+	color: #bbb;
+	}
+.leaflet-touch .leaflet-bar a {
+	width: 30px;
+	height: 30px;
+	line-height: 30px;
+	}
+.leaflet-touch .leaflet-bar a:first-child {
+	border-top-left-radius: 2px;
+	border-top-right-radius: 2px;
+	}
+.leaflet-touch .leaflet-bar a:last-child {
+	border-bottom-left-radius: 2px;
+	border-bottom-right-radius: 2px;
+	}
+.leaflet-control-zoom-in,
+.leaflet-control-zoom-out {
+	font: bold 18px 'Lucida Console', Monaco, monospace;
+	text-indent: 1px;
+	}
+.leaflet-touch .leaflet-control-zoom-in, .leaflet-touch .leaflet-control-zoom-out  {
+	font-size: 22px;
+	}
+.leaflet-control-layers {
+	box-shadow: 0 1px 5px rgba(0,0,0,0.4);
+	background: #fff;
+	border-radius: 5px;
+	}
+.leaflet-control-layers-toggle {
+	background-image: url(images/layers.png);
+	width: 36px;
+	height: 36px;
+	}
+.leaflet-retina .leaflet-control-layers-toggle {
+	background-image: url(images/layers-2x.png);
+	background-size: 26px 26px;
+	}
+.leaflet-touch .leaflet-control-layers-toggle {
+	width: 44px;
+	height: 44px;
+	}
+.leaflet-control-layers .leaflet-control-layers-list,
+.leaflet-control-layers-expanded .leaflet-control-layers-toggle {
+	display: none;
+	}
+.leaflet-control-layers-expanded .leaflet-control-layers-list {
+	display: block;
+	position: relative;
+	}
+.leaflet-control-layers-expanded {
+	padding: 6px 10px 6px 6px;
+	color: #333;
+	background: #fff;
+	}
+.leaflet-control-layers-scrollbar {
+	overflow-y: scroll;
+	overflow-x: hidden;
+	padding-right: 5px;
+	}
+.leaflet-control-layers-selector {
+	margin-top: 2px;
+	position: relative;
+	top: 1px;
+	}
+.leaflet-control-layers label {
+	display: block;
+	font-size: 13px;
+	font-size: 1.08333em;
+	}
+.leaflet-control-layers-separator {
+	height: 0;
+	border-top: 1px solid #ddd;
+	margin: 5px -10px 5px -6px;
+	}
+.leaflet-default-icon-path { 
+	background-image: url(images/marker-icon.png);
+	}
+.leaflet-container .leaflet-control-attribution {
+	background: #fff;
+	background: rgba(255, 255, 255, 0.8);
+	margin: 0;
+	}
+.leaflet-control-attribution,
+.leaflet-control-scale-line {
+	padding: 0 5px;
+	color: #333;
+	line-height: 1.4;
+	}
+.leaflet-control-attribution a {
+	text-decoration: none;
+	}
+.leaflet-control-attribution a:hover,
+.leaflet-control-attribution a:focus {
+	text-decoration: underline;
+	}
+.leaflet-attribution-flag {
+	display: inline !important;
+	vertical-align: baseline !important;
+	width: 1em;
+	height: 0.6669em;
+	}
+.leaflet-left .leaflet-control-scale {
+	margin-left: 5px;
+	}
+.leaflet-bottom .leaflet-control-scale {
+	margin-bottom: 5px;
+	}
+.leaflet-control-scale-line {
+	border: 2px solid #777;
+	border-top: none;
+	line-height: 1.1;
+	padding: 2px 5px 1px;
+	white-space: nowrap;
+	-moz-box-sizing: border-box;
+	     box-sizing: border-box;
+	background: rgba(255, 255, 255, 0.8);
+	text-shadow: 1px 1px #fff;
+	}
+.leaflet-control-scale-line:not(:first-child) {
+	border-top: 2px solid #777;
+	border-bottom: none;
+	margin-top: -2px;
+	}
+.leaflet-control-scale-line:not(:first-child):not(:last-child) {
+	border-bottom: 2px solid #777;
+	}
+.leaflet-touch .leaflet-control-attribution,
+.leaflet-touch .leaflet-control-layers,
+.leaflet-touch .leaflet-bar {
+	box-shadow: none;
+	}
+.leaflet-touch .leaflet-control-layers,
+.leaflet-touch .leaflet-bar {
+	border: 2px solid rgba(0,0,0,0.2);
+	background-clip: padding-box;
+	}
+.leaflet-popup {
+	position: absolute;
+	text-align: center;
+	margin-bottom: 20px;
+	}
+.leaflet-popup-content-wrapper {
+	padding: 1px;
+	text-align: left;
+	border-radius: 12px;
+	}
+.leaflet-popup-content {
+	margin: 13px 24px 13px 20px;
+	line-height: 1.3;
+	font-size: 13px;
+	font-size: 1.08333em;
+	min-height: 1px;
+	}
+.leaflet-popup-content p {
+	margin: 17px 0;
+	margin: 1.3em 0;
+	}
+.leaflet-popup-tip-container {
+	width: 40px;
+	height: 20px;
+	position: absolute;
+	left: 50%;
+	margin-top: -1px;
+	margin-left: -20px;
+	overflow: hidden;
+	pointer-events: none;
+	}
+.leaflet-popup-tip {
+	width: 17px;
+	height: 17px;
+	padding: 1px;
+	margin: -10px auto 0;
+	pointer-events: auto;
+	-webkit-transform: rotate(45deg);
+	   -moz-transform: rotate(45deg);
+	    -ms-transform: rotate(45deg);
+	        transform: rotate(45deg);
+	}
+.leaflet-popup-content-wrapper,
+.leaflet-popup-tip {
+	background: white;
+	color: #333;
+	box-shadow: 0 3px 14px rgba(0,0,0,0.4);
+	}
+.leaflet-container a.leaflet-popup-close-button {
+	position: absolute;
+	top: 0;
+	right: 0;
+	border: none;
+	text-align: center;
+	width: 24px;
+	height: 24px;
+	font: 16px/24px Tahoma, Verdana, sans-serif;
+	color: #757575;
+	text-decoration: none;
+	background: transparent;
+	}
+.leaflet-container a.leaflet-popup-close-button:hover,
+.leaflet-container a.leaflet-popup-close-button:focus {
+	color: #585858;
+	}
+.leaflet-popup-scrolled {
+	overflow: auto;
+	}
+.leaflet-oldie .leaflet-popup-content-wrapper {
+	-ms-zoom: 1;
+	}
+.leaflet-oldie .leaflet-popup-tip {
+	width: 24px;
+	margin: 0 auto;
+	-ms-filter: "progid:DXImageTransform.Microsoft.Matrix(M11=0.70710678, M12=0.70710678, M21=-0.70710678, M22=0.70710678)";
+	filter: progid:DXImageTransform.Microsoft.Matrix(M11=0.70710678, M12=0.70710678, M21=-0.70710678, M22=0.70710678);
+	}
+.leaflet-oldie .leaflet-control-zoom,
+.leaflet-oldie .leaflet-control-layers,
+.leaflet-oldie .leaflet-popup-content-wrapper,
+.leaflet-oldie .leaflet-popup-tip {
+	border: 1px solid #999;
+	}
+.leaflet-div-icon {
+	background: #fff;
+	border: 1px solid #666;
+	}
+.leaflet-tooltip {
+	position: absolute;
+	padding: 6px;
+	background-color: #fff;
+	border: 1px solid #fff;
+	border-radius: 3px;
+	color: #222;
+	white-space: nowrap;
+	-webkit-user-select: none;
+	-moz-user-select: none;
+	-ms-user-select: none;
+	user-select: none;
+	pointer-events: none;
+	box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+	}
+.leaflet-tooltip.leaflet-interactive {
+	cursor: pointer;
+	pointer-events: auto;
+	}
+.leaflet-tooltip-top:before,
+.leaflet-tooltip-bottom:before,
+.leaflet-tooltip-left:before,
+.leaflet-tooltip-right:before {
+	position: absolute;
+	pointer-events: none;
+	border: 6px solid transparent;
+	background: transparent;
+	content: "";
+	}
+.leaflet-tooltip-bottom {
+	margin-top: 6px;
+}
+.leaflet-tooltip-top {
+	margin-top: -6px;
+}
+.leaflet-tooltip-bottom:before,
+.leaflet-tooltip-top:before {
+	left: 50%;
+	margin-left: -6px;
+	}
+.leaflet-tooltip-top:before {
+	bottom: 0;
+	margin-bottom: -12px;
+	border-top-color: #fff;
+	}
+.leaflet-tooltip-bottom:before {
+	top: 0;
+	margin-top: -12px;
+	margin-left: -6px;
+	border-bottom-color: #fff;
+	}
+.leaflet-tooltip-left {
+	margin-left: -6px;
+}
+.leaflet-tooltip-right {
+	margin-left: 6px;
+}
+.leaflet-tooltip-left:before,
+.leaflet-tooltip-right:before {
+	top: 50%;
+	margin-top: -6px;
+	}
+.leaflet-tooltip-left:before {
+	right: 0;
+	margin-right: -12px;
+	border-left-color: #fff;
+	}
+.leaflet-tooltip-right:before {
+	left: 0;
+	margin-left: -12px;
+	border-right-color: #fff;
+	}
+@media print {
+	.leaflet-control {
+		-webkit-print-color-adjust: exact;
+		print-color-adjust: exact;
+		}
+	}
+</style>
+
+</head>
+<body>
+<header class="top">
+  <h1 class="brand">충북 EV 요금 관제<small>혼잡도 기반 동적 요금 시뮬레이터</small></h1>
+  <nav class="regions" id="regions" aria-label="시·군 선택"></nav>
+  <div class="source">
+    <button type="button" class="file-btn" id="reload" hidden>새로 받기</button>
+    <button type="button" class="file-btn share" id="share" hidden>폰으로 열기</button>
+  </div>
+</header>
+
+<main class="app">
+  <div class="map-pane">
+    <div id="map" role="region" aria-label="선택한 시·군의 충전소 지도"></div>
+    <div class="map-note" id="map-note"></div>
+    <div class="map-tools">
+      <button type="button" id="zin" aria-label="확대">+</button>
+      <button type="button" id="zout" aria-label="축소">−</button>
+      <button type="button" id="zfit" class="fit" aria-label="지역 전체 보기">맞춤</button>
+      <button type="button" id="zme" class="fit" aria-label="내 위치로 이동">내 위치</button>
+    </div>
+    <div class="me-note" id="me-note" hidden></div>
+    <div class="loading" id="loading" hidden></div>
+    <div class="timebar">
+      <div class="clock">
+        <button type="button" class="play" id="play" aria-pressed="false" aria-label="하루 재생" title="하루 재생"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5v11l9.5-5.5z"/></svg></button>
+        <div class="hour num" id="hour-big">19<span>시</span></div>
+      </div>
+      <div class="scrub">
+        <input type="range" id="hour" min="0" max="23" step="1" value="19" aria-label="시각">
+        <svg id="spark" aria-hidden="true"></svg>
+      </div>
+    </div>
+  </div>
+
+  <aside class="panel" aria-label="지역 요약과 요금 정책">
+    <section>
+      <h2 id="r-name">청주시</h2>
+      <p class="sub" id="r-sub"></p>
+      <p class="status" id="status" role="status"></p>
+      <div class="share-box" id="share-box" hidden></div>
+      <form class="key-box" id="key-box" hidden>
+        <label for="key-input">실제 데이터를 보려면 공공데이터포털 인증키를 한 번 넣어 주세요. 이 맥의 서버에만 저장됩니다.</label>
+        <div class="key-row">
+          <input id="key-input" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="인증키 (Decoding 키)">
+          <button type="submit" class="file-btn share" id="key-save">실제 데이터 켜기</button>
+        </div>
+        <span class="key-msg" id="key-msg" role="status"></span>
+      </form>
+      <div class="stack" id="stack" aria-hidden="true"></div>
+      <div class="legend" id="legend"></div>
+      <div class="figs">
+        <div class="fig"><div class="v num" id="f-idle">-</div><div class="k">대기율</div></div>
+        <div class="fig"><div class="v num" id="f-price">-</div><div class="k">급속 평균 단가</div></div>
+        <div class="fig"><div class="v num" id="f-redir">-</div><div class="k">옮겨 갈 곳 안내</div></div>
+      </div>
+    </section>
+
+    <section class="detail" id="detail" hidden></section>
+
+    <section id="pairs-sec">
+      <h3>혼잡 거점에서 옮겨 갈 곳</h3>
+      <div class="pairs" id="pairs"></div>
+    </section>
+
+    <section>
+      <h3>요금 정책</h3>
+      <div class="ctrl">
+        <label for="th">여유로 볼 대기율 기준 <output id="th-o" for="th"></output><input type="range" id="th" min="0.1" max="0.9" step="0.05" value="0.5"></label>
+        <label for="disc">여유 거점 할인 <output id="disc-o" for="disc"></output><input type="range" id="disc" min="0" max="0.5" step="0.05" value="0.2"></label>
+        <label for="sur">만차 거점 할증 <output id="sur-o" for="sur"></output><input type="range" id="sur" min="0" max="0.5" step="0.05" value="0.15"></label>
+        <label for="rad">대체 거점 탐색 반경 <output id="rad-o" for="rad"></output><input type="range" id="rad" min="0.5" max="10" step="0.5" value="3"></label>
+        <div class="check"><input type="checkbox" id="tod"><label for="tod" style="display:block">시간대 가중치 적용<small>11~14시 태양광 피크 ×0.90, 18~22시 저녁 피크 ×1.05 (가정값)</small></label></div>
+        <div class="check"><input type="checkbox" id="lim" checked><label for="lim" style="display:block">이용자 제한 충전소 제외<small>아파트 입주민 전용처럼 누구나 쓸 수 없는 곳</small></label></div>
+      </div>
+      <table class="ptable num" id="ptable"></table>
+      <p class="sub" style="margin-top:6px">표는 공공 요금 기준 예시입니다. 지도와 목록의 거점 단가는 그 충전소 운영사의 실제 회원가로 계산합니다.</p>
+    </section>
+  </aside>
+</main>
+
+<div class="below">
+  <div class="card">
+    <div class="tbl-head">
+      <h3>거점 목록</h3>
+      <input type="search" id="q" placeholder="충전소 이름이나 운영기관 검색" aria-label="거점 검색">
+    </div>
+    <div class="tbl-wrap"><table class="stbl" id="stbl"></table></div>
+  </div>
+  <div class="card method">
+    <h3>요금 계산 방식</h3>
+    <div class="formula"><b>동적 단가</b> = 운영사 실제 회원가(출력 구간별) × 혼잡 배수 × 시간대 배수</div>
+    <ol>
+      <li>충전기 상태로 대기, 충전 중, 고장을 셉니다.</li>
+      <li>대기율은 대기 ÷ (대기 + 충전 중)입니다. 고장 난 충전기는 계산에서 뺍니다.</li>
+      <li>급속과 완속을 따로 판정합니다. 대기율이 기준 이상이면 여유(할인), 대기가 한 대라도 있으면 보통, 전부 충전 중이면 혼잡(할증)입니다.</li>
+      <li>혼잡하거나 고장 난 거점마다 반경 안에서 가장 가까운, 같은 속도가 여유인 거점을 안내합니다.</li>
+    </ol>
+    <p>기본 단가는 각 충전소 운영사의 실제 회원가입니다. 무공해차 통합누리집(ev.or.kr) 사업자별 요금 매트릭스에서 102개 운영사의 출력 구간별(완속 30kW 미만, 중속 30~49kW, 급속 50~99kW, 급속 100~199kW, 초급속 200kW 이상) 회원가·비회원가를 받아, 충전기의 운영기관과 출력에 맞춰 붙였습니다. 운영사가 그 출력 구간 요금을 올리지 않았으면 같은 운영사의 가장 가까운 구간을, 운영사 요금이 아예 없으면 공공 요금(기후에너지환경부, 2026.8.1 시행: 295~393.1원)을 씁니다. 충북 충전기의 약 92%가 운영사 실제 요금으로 계산됩니다.</p>
+  </div>
+</div>
+
+<footer>
+  <span>충전기 데이터: 한국환경공단 전기자동차 충전소 정보 API(공공데이터포털). 시·군 경계: 통계청 2018 시군구 경계.</span>
+  <span>충전소 이름, 위치, 상태는 실제 API 값이고, 기본 요금은 무공해차 통합누리집에 등재된 운영사 회원가입니다. 혼잡 배수를 곱한 동적 단가는 정책 시뮬레이션 값이며 실제 청구 요금이 아닙니다.</span>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<script type="application/json" id="geo">{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"zscode":"43130","name":"충주시","center":[37.0152,127.8956]},"geometry":{"type":"Polygon","coordinates":[[[127.9824,36.816],[127.9818,36.8234],[127.976,36.8237],[127.9717,36.8263],[127.9765,36.8369],[127.9669,36.8509],[127.9694,36.8593],[127.9627,36.8616],[127.9567,36.8684],[127.9455,36.8735],[127.9494,36.8829],[127.9519,36.8847],[127.9507,36.8866],[127.9459,36.8881],[127.9322,36.8876],[127.9177,36.8811],[127.9137,36.8857],[127.9036,36.8879],[127.9032,36.8935],[127.9007,36.8974],[127.8939,36.892],[127.883,36.8903],[127.8815,36.8959],[127.864,36.8962],[127.8551,36.9072],[127.8461,36.9093],[127.8379,36.9137],[127.8421,36.9174],[127.84,36.9198],[127.843,36.9277],[127.8398,36.93],[127.8357,36.9301],[127.8318,36.9354],[127.8329,36.9398],[127.8216,36.9434],[127.8202,36.9415],[127.8094,36.9396],[127.8072,36.9416],[127.8066,36.946],[127.7998,36.9475],[127.7949,36.9459],[127.7916,36.9387],[127.7844,36.9377],[127.7756,36.9333],[127.7648,36.9398],[127.7624,36.9441],[127.7638,36.9463],[127.7626,36.9485],[127.7529,36.9579],[127.7393,36.9524],[127.7329,36.9537],[127.73,36.958],[127.7268,36.959],[127.7163,36.9584],[127.7058,36.9658],[127.7021,36.9727],[127.6945,36.975],[127.6941,36.9786],[127.6866,36.9815],[127.6863,36.9859],[127.6721,36.9859],[127.6684,36.9876],[127.6638,36.9838],[127.6691,36.9827],[127.6671,36.9787],[127.6618,36.9774],[127.6511,36.9828],[127.6537,36.9866],[127.6526,36.9917],[127.6551,37.0014],[127.6591,37.0035],[127.6655,37.0031],[127.6599,37.0081],[127.6563,37.0159],[127.6646,37.0232],[127.6643,37.0306],[127.672,37.0347],[127.672,37.0402],[127.6856,37.0474],[127.6912,37.0531],[127.6871,37.0713],[127.6829,37.0759],[127.6835,37.0781],[127.6866,37.081],[127.6922,37.0813],[127.6934,37.0855],[127.6992,37.0916],[127.6982,37.0994],[127.7019,37.103],[127.7205,37.1107],[127.7227,37.115],[127.7221,37.1208],[127.712,37.1278],[127.7097,37.1352],[127.6945,37.1413],[127.6952,37.1512],[127.7043,37.1576],[127.7048,37.1675],[127.7169,37.1834],[127.7228,37.1816],[127.7264,37.1825],[127.7295,37.1923],[127.7325,37.1958],[127.7353,37.2081],[127.7435,37.2146],[127.7443,37.2073],[127.7489,37.1968],[127.7501,37.1859],[127.756,37.1709],[127.7655,37.1591],[127.7895,37.1434],[127.7929,37.1453],[127.8016,37.1443],[127.8069,37.1471],[127.8169,37.147],[127.8254,37.1523],[127.8474,37.1529],[127.8501,37.1542],[127.8532,37.1603],[127.8553,37.16],[127.8559,37.1565],[127.8613,37.1553],[127.862,37.1611],[127.872,37.1643],[127.8866,37.1611],[127.8951,37.1562],[127.8989,37.1498],[127.9019,37.1522],[127.9041,37.1602],[127.9086,37.1671],[127.915,37.1689],[127.9246,37.1645],[127.955,37.1615],[127.9683,37.1562],[127.9711,37.1507],[127.9706,37.1422],[127.9769,37.1414],[127.9826,37.1312],[127.9866,37.1312],[127.9854,37.1124],[127.9992,37.1082],[128.0015,37.1004],[128.0039,37.0984],[128.0115,37.0996],[128.0127,37.1094],[128.0199,37.1179],[128.0371,37.1119],[128.0453,37.1157],[128.0485,37.1084],[128.0455,37.106],[128.0474,37.1027],[128.053,37.097],[128.0631,37.0967],[128.0589,37.0895],[128.0607,37.0867],[128.0757,37.0843],[128.0853,37.0761],[128.0821,37.0708],[128.0858,37.0656],[128.0826,37.059],[128.0838,37.0555],[128.0808,37.0484],[128.0845,37.0444],[128.0835,37.0389],[128.0888,37.0314],[128.0872,37.0278],[128.0904,37.0233],[128.0856,37.02],[128.0889,37.0179],[128.0864,37.0108],[128.0775,37.0063],[128.0762,37.0035],[128.0789,36.9963],[128.084,36.9955],[128.0849,36.9904],[128.0901,36.9895],[128.0909,36.9856],[128.0865,36.9663],[128.0866,36.951],[128.0849,36.9477],[128.0751,36.95],[128.06,36.9602],[128.0403,36.9544],[128.0431,36.951],[128.043,36.9397],[128.0586,36.9318],[128.0625,36.92],[128.0727,36.9133],[128.0722,36.911],[128.0663,36.9094],[128.0681,36.905],[128.0663,36.8939],[128.0591,36.8875],[128.0605,36.885],[128.0554,36.8826],[128.0509,36.8722],[128.0455,36.8705],[128.044,36.8625],[128.0386,36.8598],[128.0356,36.855],[128.0368,36.8517],[128.0552,36.8444],[128.0619,36.8379],[128.0688,36.8453],[128.0871,36.8515],[128.0914,36.8492],[128.0939,36.8369],[128.0975,36.8335],[128.1107,36.8302],[128.1265,36.834],[128.1336,36.8328],[128.134,36.8284],[128.1299,36.8252],[128.1184,36.8215],[128.1099,36.8215],[128.1071,36.8073],[128.093,36.8029],[128.0935,36.7968],[128.0838,36.7993],[128.0854,36.8042],[128.0674,36.8168],[128.0592,36.8164],[128.0472,36.8222],[128.039,36.8214],[128.0355,36.825],[128.024,36.826],[128.023,36.8131],[128.0182,36.8083],[128.0116,36.8068],[127.9978,36.8129],[127.9926,36.8127],[127.9824,36.816]]]}},{"type":"Feature","properties":{"zscode":"43150","name":"제천시","center":[37.0601,128.1409]},"geometry":{"type":"Polygon","coordinates":[[[127.9814,37.2569],[127.9869,37.2578],[127.9942,37.2536],[127.999,37.2549],[128.008,37.2521],[128.0126,37.2477],[128.0183,37.2457],[128.023,37.2256],[128.0312,37.2238],[128.0328,37.2201],[128.0387,37.216],[128.0331,37.2108],[128.0283,37.2023],[128.0322,37.198],[128.0326,37.1931],[128.0372,37.1893],[128.0411,37.189],[128.0438,37.1909],[128.0498,37.1896],[128.0605,37.1941],[128.072,37.1945],[128.0743,37.1931],[128.1087,37.2057],[128.1142,37.2131],[128.1155,37.2203],[128.1224,37.2252],[128.1215,37.2293],[128.1253,37.2345],[128.1296,37.2338],[128.1329,37.2298],[128.1405,37.2296],[128.1423,37.2243],[128.1509,37.2207],[128.1542,37.2159],[128.158,37.2163],[128.1645,37.2135],[128.1731,37.2191],[128.1741,37.2326],[128.2012,37.249],[128.2078,37.2488],[128.2102,37.2458],[128.2147,37.2461],[128.2148,37.2418],[128.2203,37.2403],[128.2292,37.2276],[128.233,37.227],[128.2374,37.2293],[128.2443,37.2265],[128.2509,37.2296],[128.2598,37.2164],[128.2684,37.2079],[128.284,37.2107],[128.2882,37.2151],[128.3091,37.2175],[128.3166,37.2234],[128.3201,37.2199],[128.3322,37.2139],[128.3264,37.1973],[128.3224,37.1983],[128.3218,37.1955],[128.3134,37.1968],[128.3137,37.1933],[128.3105,37.1873],[128.3026,37.1866],[128.2956,37.1833],[128.2981,37.1717],[128.2897,37.1701],[128.2811,37.1734],[128.2738,37.1693],[128.2689,37.1616],[128.2644,37.1604],[128.2662,37.156],[128.2706,37.1542],[128.2723,37.1489],[128.2776,37.1442],[128.2927,37.1393],[128.2961,37.1342],[128.2983,37.1342],[128.3035,37.1289],[128.3042,37.1173],[128.3084,37.1145],[128.309,37.1119],[128.3038,37.1003],[128.2939,37.0981],[128.2871,37.1022],[128.2821,37.1089],[128.2805,37.1081],[128.2778,37.1108],[128.2776,37.1158],[128.2708,37.1159],[128.2674,37.1135],[128.2669,37.1086],[128.2629,37.1075],[128.2564,37.1015],[128.2615,37.0957],[128.2623,37.0903],[128.2695,37.0876],[128.2623,37.0828],[128.2552,37.082],[128.2492,37.0751],[128.2468,37.0769],[128.2394,37.0736],[128.2368,37.0654],[128.2254,37.0623],[128.2219,37.0561],[128.2179,37.0543],[128.2211,37.0496],[128.219,37.0458],[128.22,37.0416],[128.2171,37.0374],[128.2244,37.0343],[128.2251,37.0272],[128.228,37.0245],[128.2399,37.0241],[128.2561,37.0055],[128.2576,37.0001],[128.2539,36.9975],[128.2585,36.9933],[128.257,36.9847],[128.2616,36.9677],[128.2657,36.9611],[128.2597,36.9549],[128.2645,36.9523],[128.2635,36.9495],[128.2598,36.9487],[128.2529,36.9427],[128.2474,36.9446],[128.2448,36.9419],[128.247,36.9379],[128.2363,36.9336],[128.2367,36.9166],[128.2462,36.905],[128.2438,36.891],[128.2509,36.8847],[128.2439,36.88],[128.2395,36.8651],[128.2347,36.8628],[128.2344,36.8547],[128.2387,36.8502],[128.237,36.8454],[128.2137,36.8496],[128.2113,36.8469],[128.2107,36.8424],[128.2145,36.8349],[128.2173,36.8194],[128.2154,36.812],[128.2072,36.8124],[128.1937,36.8171],[128.1848,36.8166],[128.1713,36.8221],[128.1626,36.821],[128.1531,36.8224],[128.149,36.8286],[128.1442,36.8302],[128.1418,36.8333],[128.1222,36.8339],[128.1107,36.8302],[128.0976,36.8335],[128.0939,36.8369],[128.0914,36.8492],[128.0871,36.8515],[128.0688,36.8453],[128.0619,36.8379],[128.0552,36.8444],[128.0368,36.8517],[128.0359,36.8559],[128.0386,36.8598],[128.044,36.8625],[128.0455,36.8705],[128.0509,36.8722],[128.0554,36.8826],[128.0605,36.885],[128.0591,36.8875],[128.0663,36.8939],[128.0681,36.905],[128.0663,36.9094],[128.0722,36.911],[128.0727,36.9133],[128.0625,36.92],[128.0586,36.9318],[128.043,36.9397],[128.0431,36.951],[128.0403,36.9544],[128.06,36.9602],[128.0751,36.95],[128.0849,36.9477],[128.0866,36.951],[128.0865,36.9663],[128.0909,36.9856],[128.0901,36.9895],[128.0849,36.9904],[128.084,36.9955],[128.0789,36.9963],[128.0762,37.0035],[128.0775,37.0063],[128.0864,37.0108],[128.0889,37.0179],[128.0856,37.02],[128.0904,37.0233],[128.0872,37.0278],[128.0888,37.0314],[128.0835,37.0389],[128.0845,37.0444],[128.0808,37.0484],[128.0838,37.0555],[128.0826,37.059],[128.0858,37.0656],[128.0821,37.0708],[128.0853,37.0759],[128.0757,37.0843],[128.0607,37.0867],[128.0589,37.0895],[128.0631,37.0967],[128.053,37.097],[128.0474,37.1027],[128.0455,37.106],[128.0485,37.1084],[128.0453,37.1157],[128.0371,37.1119],[128.0199,37.1179],[128.0127,37.1094],[128.0115,37.0996],[128.0039,37.0984],[128.0015,37.1004],[127.9992,37.1082],[127.9854,37.1124],[127.9866,37.1312],[127.9826,37.1312],[127.9769,37.1414],[127.9706,37.1422],[127.9711,37.1507],[127.9683,37.1562],[127.955,37.1615],[127.9427,37.1619],[127.9393,37.1639],[127.934,37.1633],[127.9263,37.1655],[127.9273,37.1698],[127.9336,37.1758],[127.9326,37.1824],[127.9363,37.1888],[127.933,37.1931],[127.9309,37.2011],[127.9325,37.207],[127.9271,37.2201],[127.9225,37.2221],[127.9217,37.2254],[127.9266,37.2316],[127.9389,37.2407],[127.9452,37.2406],[127.9527,37.2479],[127.9646,37.251],[127.9697,37.2557],[127.9799,37.2583],[127.9814,37.2569]]]}},{"type":"Feature","properties":{"zscode":"43110","name":"청주시","center":[36.6273,127.4987]},"geometry":{"type":"Polygon","coordinates":[[[127.4761,36.4763],[127.4668,36.4702],[127.4638,36.4645],[127.4626,36.4561],[127.4513,36.4492],[127.4441,36.4504],[127.4359,36.4564],[127.415,36.4547],[127.4021,36.456],[127.3997,36.4618],[127.4014,36.4627],[127.4041,36.4811],[127.403,36.4855],[127.3961,36.4917],[127.4106,36.4963],[127.4078,36.5033],[127.409,36.5097],[127.4049,36.5119],[127.4038,36.5174],[127.3976,36.5206],[127.4015,36.5237],[127.4086,36.5237],[127.405,36.5373],[127.4002,36.5418],[127.3923,36.54],[127.3839,36.5415],[127.3832,36.5479],[127.3785,36.5498],[127.3781,36.5552],[127.3726,36.5597],[127.378,36.5629],[127.3774,36.5683],[127.3577,36.5618],[127.351,36.5622],[127.3471,36.5645],[127.3381,36.5623],[127.3351,36.5681],[127.3358,36.5711],[127.3266,36.5765],[127.3214,36.5838],[127.3058,36.583],[127.2996,36.5863],[127.3048,36.5914],[127.3066,36.6009],[127.3008,36.6077],[127.3018,36.6128],[127.2993,36.6183],[127.2959,36.6197],[127.2963,36.6242],[127.2918,36.6256],[127.2907,36.6311],[127.2922,36.6356],[127.2892,36.6369],[127.2849,36.6341],[127.2794,36.6335],[127.2756,36.6398],[127.277,36.6419],[127.2795,36.6407],[127.2828,36.6423],[127.2816,36.6451],[127.2887,36.6589],[127.2998,36.6622],[127.3051,36.6676],[127.3076,36.682],[127.3031,36.6855],[127.2921,36.6871],[127.2853,36.6907],[127.2916,36.697],[127.3013,36.7],[127.3084,36.7048],[127.3061,36.7083],[127.3105,36.7243],[127.318,36.7249],[127.3255,36.7337],[127.3283,36.7346],[127.3375,36.7293],[127.3425,36.7338],[127.3425,36.737],[127.3334,36.7467],[127.3355,36.7526],[127.3522,36.7541],[127.3588,36.7606],[127.3685,36.7614],[127.3723,36.7579],[127.3864,36.7593],[127.3887,36.7535],[127.3942,36.7516],[127.396,36.7479],[127.4019,36.7462],[127.4044,36.746],[127.4056,36.7503],[127.4113,36.7535],[127.4123,36.7573],[127.4245,36.7588],[127.4269,36.7576],[127.4248,36.7548],[127.4271,36.7508],[127.4391,36.7532],[127.4424,36.7494],[127.4494,36.7491],[127.4509,36.7494],[127.4491,36.7554],[127.4499,36.7591],[127.4584,36.7658],[127.4604,36.7699],[127.4704,36.7688],[127.4818,36.776],[127.4904,36.7738],[127.4971,36.78],[127.505,36.7795],[127.5087,36.7769],[127.5102,36.7729],[127.5076,36.7679],[127.509,36.7668],[127.5321,36.7708],[127.5648,36.7803],[127.5676,36.7738],[127.5751,36.7674],[127.5791,36.767],[127.5841,36.7619],[127.5889,36.7606],[127.5872,36.7554],[127.5903,36.7531],[127.5908,36.7476],[127.5983,36.7442],[127.6036,36.7458],[127.6061,36.7434],[127.6106,36.7353],[127.6096,36.7302],[127.6138,36.7265],[127.6157,36.7197],[127.6188,36.7163],[127.6179,36.7074],[127.623,36.7046],[127.6338,36.7089],[127.6382,36.708],[127.6424,36.7026],[127.6512,36.702],[127.6627,36.715],[127.6614,36.7223],[127.6645,36.73],[127.6796,36.7171],[127.6838,36.7173],[127.6869,36.7205],[127.6927,36.7121],[127.7019,36.7099],[127.7022,36.7038],[127.7137,36.6952],[127.714,36.6899],[127.7249,36.6819],[127.7271,36.6825],[127.725,36.6752],[127.7126,36.6677],[127.7103,36.6628],[127.7123,36.6572],[127.7094,36.654],[127.7127,36.6503],[127.7234,36.6513],[127.7258,36.6447],[127.7348,36.6397],[127.7381,36.6413],[127.74,36.6332],[127.75,36.6254],[127.7502,36.6219],[127.7646,36.6131],[127.7695,36.604],[127.7688,36.5942],[127.7459,36.5853],[127.741,36.5913],[127.7373,36.5926],[127.7365,36.6],[127.7287,36.6023],[127.7272,36.6011],[127.7138,36.602],[127.7097,36.5961],[127.6946,36.5885],[127.687,36.5921],[127.6805,36.5924],[127.6767,36.5967],[127.6686,36.5945],[127.6685,36.5984],[127.6655,36.6024],[127.654,36.6004],[127.6524,36.6049],[127.6462,36.6066],[127.6405,36.6016],[127.6357,36.6002],[127.6302,36.5936],[127.6318,36.5889],[127.6233,36.5815],[127.6224,36.5782],[127.6178,36.5775],[127.6115,36.5693],[127.6112,36.5668],[127.6172,36.5595],[127.6124,36.5514],[127.6036,36.5479],[127.599,36.5483],[127.5918,36.5435],[127.5808,36.542],[127.5781,36.5375],[127.5711,36.5357],[127.565,36.5306],[127.5727,36.5159],[127.5728,36.5081],[127.5702,36.4993],[127.5768,36.4905],[127.5673,36.4843],[127.5671,36.4816],[127.5627,36.4802],[127.5586,36.4721],[127.5562,36.4718],[127.5532,36.4591],[127.5448,36.4463],[127.5287,36.441],[127.5192,36.4345],[127.5095,36.4086],[127.5015,36.4087],[127.4898,36.4334],[127.4935,36.4412],[127.5035,36.4494],[127.5038,36.4537],[127.5006,36.4562],[127.4845,36.4529],[127.4795,36.456],[127.4777,36.4605],[127.4845,36.4745],[127.484,36.4766],[127.4761,36.4763]]]}},{"type":"Feature","properties":{"zscode":"43720","name":"보은군","center":[36.4899,127.7294]},"geometry":{"type":"Polygon","coordinates":[[[127.7863,36.6138],[127.7985,36.6021],[127.7961,36.5953],[127.7994,36.5895],[127.7985,36.5864],[127.8049,36.5814],[127.8162,36.5781],[127.8182,36.5747],[127.8245,36.5709],[127.8302,36.5743],[127.8371,36.5701],[127.8426,36.5705],[127.8433,36.569],[127.8524,36.5712],[127.8604,36.568],[127.8602,36.5659],[127.8703,36.5592],[127.873,36.5513],[127.8705,36.5428],[127.8744,36.5409],[127.8761,36.537],[127.879,36.5347],[127.8887,36.5337],[127.893,36.5305],[127.8963,36.5312],[127.9025,36.5281],[127.9009,36.525],[127.9034,36.5173],[127.9025,36.5132],[127.9061,36.5061],[127.8887,36.4931],[127.8805,36.4933],[127.8755,36.4857],[127.8753,36.4832],[127.8806,36.4806],[127.8824,36.4759],[127.8808,36.4685],[127.8784,36.4671],[127.882,36.4618],[127.879,36.4577],[127.8783,36.4505],[127.8748,36.4488],[127.8722,36.4409],[127.8755,36.4297],[127.873,36.4243],[127.8827,36.4243],[127.8827,36.4222],[127.8757,36.4143],[127.873,36.4059],[127.8639,36.403],[127.8663,36.3948],[127.8629,36.393],[127.8757,36.3906],[127.8792,36.3834],[127.8842,36.38],[127.8831,36.3742],[127.8799,36.3715],[127.875,36.3708],[127.8612,36.3739],[127.8521,36.3714],[127.8371,36.3728],[127.8359,36.3693],[127.8326,36.3691],[127.8316,36.374],[127.8244,36.377],[127.8228,36.3799],[127.8186,36.3817],[127.8006,36.3824],[127.7898,36.3886],[127.7856,36.387],[127.7814,36.3889],[127.7708,36.3875],[127.7624,36.3935],[127.7603,36.391],[127.7553,36.3911],[127.7467,36.3858],[127.7348,36.3925],[127.7303,36.3899],[127.7184,36.3963],[127.7082,36.4065],[127.7101,36.4138],[127.7001,36.4138],[127.6813,36.4185],[127.6785,36.427],[127.6805,36.436],[127.6658,36.445],[127.6577,36.438],[127.654,36.4387],[127.6447,36.4453],[127.6414,36.4426],[127.6392,36.436],[127.6312,36.4395],[127.6281,36.4286],[127.62,36.4204],[127.6208,36.4182],[127.6173,36.4174],[127.6168,36.4092],[127.6122,36.4034],[127.6053,36.4038],[127.6044,36.4086],[127.6025,36.4095],[127.6014,36.4072],[127.5989,36.4078],[127.5986,36.412],[127.5967,36.4107],[127.5903,36.4119],[127.5841,36.4178],[127.5798,36.4079],[127.5658,36.3979],[127.5581,36.3966],[127.5548,36.3928],[127.5537,36.395],[127.5597,36.3982],[127.5532,36.4012],[127.5501,36.4071],[127.5456,36.4088],[127.5429,36.4121],[127.5423,36.4193],[127.5396,36.4206],[127.5294,36.4192],[127.5243,36.4234],[127.5209,36.4216],[127.5145,36.4225],[127.5198,36.435],[127.5306,36.4418],[127.5448,36.4463],[127.5532,36.4591],[127.5562,36.4718],[127.5586,36.4721],[127.5627,36.4802],[127.5671,36.4816],[127.5673,36.4843],[127.5768,36.4905],[127.5702,36.4993],[127.5728,36.5081],[127.5727,36.5159],[127.565,36.5306],[127.5711,36.5357],[127.5781,36.5375],[127.5808,36.542],[127.5918,36.5435],[127.599,36.5483],[127.6036,36.5479],[127.6124,36.5514],[127.6172,36.5595],[127.6112,36.5668],[127.6115,36.5693],[127.6178,36.5775],[127.6224,36.5782],[127.6233,36.5815],[127.6318,36.5889],[127.6302,36.5936],[127.6357,36.6002],[127.6405,36.6016],[127.6462,36.6066],[127.6524,36.6049],[127.654,36.6004],[127.6655,36.6024],[127.6685,36.5984],[127.6686,36.5945],[127.6767,36.5967],[127.6805,36.5924],[127.687,36.5921],[127.6946,36.5885],[127.7097,36.5961],[127.7138,36.602],[127.7272,36.6011],[127.7287,36.6023],[127.7365,36.6],[127.7373,36.5926],[127.741,36.5913],[127.7459,36.5853],[127.7688,36.5942],[127.7695,36.604],[127.7814,36.6088],[127.7863,36.6138]]]}},{"type":"Feature","properties":{"zscode":"43730","name":"옥천군","center":[36.3204,127.6566]},"geometry":{"type":"Polygon","coordinates":[[[127.6447,36.4453],[127.654,36.4387],[127.6577,36.438],[127.6658,36.445],[127.6803,36.4363],[127.6785,36.427],[127.6813,36.4185],[127.7001,36.4138],[127.7101,36.4138],[127.7082,36.4065],[127.7184,36.3963],[127.7303,36.3899],[127.7348,36.3925],[127.7467,36.3858],[127.7553,36.3911],[127.7603,36.391],[127.7624,36.3935],[127.7708,36.3875],[127.7814,36.3889],[127.7856,36.387],[127.7898,36.3886],[127.8006,36.3824],[127.8186,36.3817],[127.8228,36.3799],[127.8244,36.377],[127.8316,36.374],[127.8326,36.3691],[127.8359,36.3693],[127.8371,36.3728],[127.8521,36.3714],[127.8612,36.3739],[127.8837,36.3706],[127.8865,36.3636],[127.8913,36.3597],[127.8905,36.3566],[127.8856,36.3547],[127.8855,36.3502],[127.8826,36.3459],[127.8701,36.3435],[127.87,36.3399],[127.8658,36.3356],[127.8615,36.3351],[127.8526,36.3296],[127.8507,36.3208],[127.8452,36.3164],[127.825,36.3101],[127.821,36.3052],[127.8174,36.3103],[127.8135,36.3083],[127.8083,36.3088],[127.8019,36.3037],[127.8003,36.2982],[127.795,36.2968],[127.7944,36.2905],[127.7796,36.2894],[127.7758,36.2919],[127.7702,36.2903],[127.7619,36.2801],[127.7616,36.2718],[127.7558,36.2679],[127.7359,36.2728],[127.7292,36.2762],[127.7217,36.2695],[127.7138,36.2685],[127.7121,36.266],[127.7147,36.2631],[127.7018,36.2608],[127.6969,36.2516],[127.6938,36.2499],[127.6913,36.2386],[127.6847,36.2331],[127.6805,36.2257],[127.6725,36.2222],[127.6638,36.2233],[127.6561,36.2293],[127.6507,36.2251],[127.6503,36.2198],[127.6523,36.2157],[127.6484,36.2071],[127.6544,36.192],[127.6538,36.1888],[127.65,36.1853],[127.6551,36.1773],[127.6497,36.1707],[127.6439,36.1722],[127.633,36.1804],[127.6271,36.178],[127.6239,36.181],[127.6112,36.1832],[127.6082,36.1857],[127.5977,36.1849],[127.5925,36.1952],[127.5995,36.2046],[127.598,36.2171],[127.5911,36.2217],[127.5836,36.2313],[127.5703,36.2335],[127.5639,36.2278],[127.5616,36.229],[127.5544,36.2262],[127.5453,36.2255],[127.5499,36.2384],[127.5379,36.2428],[127.5351,36.2473],[127.5362,36.2512],[127.5269,36.2483],[127.5181,36.2406],[127.5023,36.2377],[127.4926,36.2379],[127.4923,36.2444],[127.4894,36.246],[127.4876,36.2514],[127.49,36.2573],[127.4863,36.2592],[127.4861,36.2612],[127.4903,36.2684],[127.4887,36.2727],[127.4988,36.2828],[127.4912,36.297],[127.4924,36.3],[127.4974,36.3016],[127.499,36.3057],[127.4946,36.312],[127.4978,36.3164],[127.496,36.3199],[127.5,36.3208],[127.503,36.3256],[127.5006,36.3393],[127.5081,36.3432],[127.5074,36.3463],[127.512,36.3461],[127.5194,36.3503],[127.5224,36.3543],[127.5241,36.3659],[127.5266,36.3701],[127.5249,36.3875],[127.5334,36.3918],[127.5392,36.3979],[127.5537,36.395],[127.5548,36.3928],[127.5581,36.3966],[127.5658,36.3979],[127.5805,36.4085],[127.5841,36.4178],[127.5903,36.4119],[127.5967,36.4107],[127.5986,36.412],[127.5989,36.4078],[127.6014,36.4072],[127.6025,36.4095],[127.6044,36.4086],[127.6053,36.4038],[127.6122,36.4034],[127.6168,36.4092],[127.6173,36.4174],[127.6208,36.4182],[127.62,36.4204],[127.6281,36.4286],[127.6312,36.4395],[127.6392,36.436],[127.6419,36.4433],[127.6447,36.4453]]]}},{"type":"Feature","properties":{"zscode":"43740","name":"영동군","center":[36.1596,127.8143]},"geometry":{"type":"Polygon","coordinates":[[[127.8452,36.3164],[127.8415,36.3083],[127.8469,36.3008],[127.8457,36.2937],[127.8492,36.2888],[127.8521,36.2739],[127.8609,36.2771],[127.8826,36.2737],[127.8899,36.2892],[127.9043,36.3015],[127.9081,36.2855],[127.9235,36.2787],[127.9309,36.278],[127.9379,36.2691],[127.9428,36.2667],[127.9474,36.2672],[127.9493,36.2567],[127.9546,36.2572],[127.9602,36.2524],[127.9648,36.2532],[127.9706,36.2504],[127.9783,36.2546],[127.9767,36.2593],[127.9812,36.2636],[127.9905,36.2634],[127.9944,36.2674],[127.9978,36.2682],[128.0005,36.2664],[128.0091,36.272],[128.019,36.2673],[128.0262,36.2679],[128.0269,36.2653],[128.0332,36.2615],[128.0473,36.2565],[128.0457,36.2521],[128.0403,36.252],[128.0357,36.2435],[128.0299,36.24],[128.0331,36.2337],[128.0393,36.2287],[128.0405,36.2247],[128.039,36.2222],[128.0422,36.2176],[128.0501,36.2165],[128.0508,36.206],[128.0582,36.2013],[128.0529,36.2008],[128.0386,36.1942],[128.024,36.2067],[128.0097,36.2094],[128.0064,36.2073],[127.9985,36.2073],[127.993,36.2],[127.9841,36.2005],[127.978,36.1981],[127.9812,36.1959],[127.9753,36.1877],[127.9813,36.1791],[127.9841,36.1782],[127.9826,36.1706],[127.9898,36.1652],[127.9905,36.1589],[127.9972,36.1555],[127.9875,36.1474],[127.9892,36.144],[127.9873,36.1409],[127.9889,36.1328],[127.9878,36.1288],[127.9764,36.1227],[127.9702,36.1219],[127.9668,36.1181],[127.9652,36.1128],[127.9687,36.1031],[127.9649,36.0986],[127.9646,36.0956],[127.9597,36.0945],[127.9585,36.0901],[127.9617,36.083],[127.9609,36.0703],[127.9535,36.0663],[127.9475,36.0577],[127.9363,36.0511],[127.9302,36.0494],[127.9256,36.0524],[127.9167,36.0543],[127.9061,36.0467],[127.9027,36.0391],[127.8885,36.0348],[127.8848,36.0359],[127.8835,36.0281],[127.8768,36.0225],[127.8662,36.0243],[127.8606,36.0315],[127.8557,36.0329],[127.8528,36.0391],[127.8486,36.0397],[127.8391,36.0359],[127.8304,36.0352],[127.819,36.029],[127.7994,36.0261],[127.7876,36.0145],[127.7815,36.0165],[127.7643,36.0124],[127.7593,36.0152],[127.7626,36.0216],[127.7616,36.0252],[127.7539,36.0241],[127.7473,36.0297],[127.7436,36.0285],[127.7415,36.0248],[127.7348,36.0323],[127.7192,36.0319],[127.7134,36.0357],[127.7019,36.0353],[127.6965,36.0411],[127.695,36.0459],[127.695,36.0588],[127.6907,36.058],[127.6881,36.0627],[127.6698,36.0514],[127.6727,36.0416],[127.6691,36.0387],[127.6602,36.0385],[127.6544,36.0559],[127.6491,36.058],[127.6484,36.0626],[127.6445,36.0668],[127.6382,36.0682],[127.6342,36.0736],[127.6321,36.0824],[127.6233,36.0907],[127.6192,36.0907],[127.6173,36.0936],[127.6169,36.1049],[127.6191,36.1089],[127.6131,36.1118],[127.6101,36.1185],[127.6055,36.1182],[127.599,36.1235],[127.5895,36.1343],[127.591,36.1448],[127.6017,36.16],[127.6015,36.169],[127.5986,36.1738],[127.5931,36.1774],[127.5947,36.181],[127.5977,36.1849],[127.6082,36.1857],[127.6112,36.1832],[127.6239,36.181],[127.6271,36.178],[127.633,36.1804],[127.6439,36.1722],[127.6497,36.1707],[127.6551,36.1773],[127.6502,36.1841],[127.6544,36.192],[127.6484,36.2071],[127.6523,36.2157],[127.6503,36.2198],[127.6506,36.225],[127.6561,36.2293],[127.6638,36.2233],[127.6725,36.2222],[127.6805,36.2257],[127.6847,36.2331],[127.6913,36.2386],[127.6938,36.2499],[127.6969,36.2516],[127.7003,36.2589],[127.7066,36.2627],[127.7147,36.2631],[127.7121,36.266],[127.714,36.2686],[127.7217,36.2695],[127.731,36.2764],[127.7359,36.2728],[127.7558,36.2679],[127.7616,36.2718],[127.7619,36.2801],[127.7702,36.2903],[127.7758,36.2919],[127.7796,36.2894],[127.7944,36.2905],[127.795,36.2968],[127.8003,36.2982],[127.8019,36.3037],[127.8083,36.3088],[127.8135,36.3083],[127.8174,36.3103],[127.821,36.3052],[127.825,36.3101],[127.8452,36.3164]]]}},{"type":"Feature","properties":{"zscode":"43750","name":"진천군","center":[36.8709,127.4405]},"geometry":{"type":"Polygon","coordinates":[[[127.4412,37.0121],[127.449,37.0098],[127.4476,37.0007],[127.4505,36.9951],[127.4481,36.9899],[127.4503,36.9819],[127.4493,36.9772],[127.4539,36.9741],[127.454,36.9698],[127.4571,36.9654],[127.4549,36.9607],[127.4484,36.9632],[127.4464,36.9614],[127.4454,36.9588],[127.4473,36.9499],[127.4568,36.9473],[127.4635,36.9484],[127.4665,36.9392],[127.4706,36.9362],[127.4766,36.9364],[127.4812,36.9337],[127.4861,36.9387],[127.4928,36.9388],[127.4999,36.9332],[127.5114,36.9306],[127.5137,36.9256],[127.5194,36.9229],[127.5275,36.911],[127.5338,36.912],[127.546,36.9034],[127.5463,36.901],[127.5531,36.8989],[127.5537,36.896],[127.5519,36.8939],[127.5552,36.8913],[127.5556,36.8862],[127.5606,36.8849],[127.5627,36.8822],[127.5667,36.8827],[127.567,36.886],[127.5686,36.8857],[127.5723,36.8774],[127.5778,36.8798],[127.585,36.8746],[127.5852,36.8711],[127.5825,36.8675],[127.5766,36.8647],[127.5778,36.8625],[127.5756,36.8578],[127.5786,36.8523],[127.5715,36.8501],[127.5734,36.8472],[127.5716,36.8439],[127.5727,36.8413],[127.5687,36.8385],[127.5699,36.8293],[127.572,36.8278],[127.5783,36.8296],[127.5792,36.8282],[127.5721,36.82],[127.5557,36.8174],[127.55,36.8129],[127.5448,36.8135],[127.5373,36.8086],[127.5481,36.7983],[127.5552,36.7992],[127.5648,36.7803],[127.5321,36.7708],[127.509,36.7668],[127.5076,36.7679],[127.5102,36.7729],[127.5087,36.7769],[127.505,36.7795],[127.4971,36.78],[127.4904,36.7738],[127.4818,36.776],[127.4704,36.7688],[127.4604,36.7699],[127.4584,36.7658],[127.451,36.761],[127.4491,36.7554],[127.4509,36.7494],[127.4475,36.749],[127.4424,36.7494],[127.4391,36.7532],[127.4271,36.7508],[127.4248,36.7548],[127.4269,36.7576],[127.4197,36.7577],[127.4204,36.7609],[127.4129,36.7732],[127.4033,36.7751],[127.3998,36.7809],[127.3955,36.7825],[127.3967,36.7903],[127.4017,36.7951],[127.4008,36.7991],[127.3975,36.7997],[127.3822,36.8137],[127.3666,36.817],[127.3581,36.8225],[127.3572,36.8275],[127.3517,36.8307],[127.3464,36.8293],[127.3345,36.8307],[127.3365,36.8546],[127.3296,36.8575],[127.3245,36.8569],[127.3166,36.8592],[127.3127,36.8575],[127.3073,36.8597],[127.3058,36.8633],[127.3113,36.8705],[127.3079,36.8854],[127.2878,36.8938],[127.2903,36.8943],[127.2903,36.8977],[127.2974,36.904],[127.3034,36.9164],[127.2984,36.9227],[127.2952,36.9297],[127.2956,36.9313],[127.3002,36.9294],[127.309,36.9294],[127.3162,36.9347],[127.3268,36.9359],[127.3406,36.9431],[127.3496,36.9528],[127.354,36.9527],[127.3576,36.9477],[127.3618,36.9495],[127.3757,36.9487],[127.3782,36.9521],[127.3787,36.9579],[127.3848,36.9596],[127.3873,36.9645],[127.3975,36.9646],[127.4015,36.9677],[127.3967,36.9746],[127.385,36.9836],[127.3913,36.9916],[127.3931,36.9974],[127.415,37.0],[127.4212,37.004],[127.4288,37.0022],[127.4365,37.0056],[127.4412,37.0121]]]}},{"type":"Feature","properties":{"zscode":"43760","name":"괴산군","center":[36.7697,127.8296]},"geometry":{"type":"Polygon","coordinates":[[[127.8066,36.946],[127.8094,36.9396],[127.819,36.9412],[127.8216,36.9434],[127.8329,36.9398],[127.8318,36.9354],[127.8357,36.9301],[127.8398,36.93],[127.843,36.9277],[127.84,36.9198],[127.8421,36.9174],[127.8379,36.9137],[127.8461,36.9093],[127.8551,36.9072],[127.864,36.8962],[127.8815,36.8959],[127.883,36.8903],[127.8939,36.892],[127.9007,36.8974],[127.9032,36.8935],[127.9036,36.8879],[127.9137,36.8857],[127.9177,36.8811],[127.9322,36.8876],[127.9459,36.8881],[127.9512,36.8863],[127.9519,36.8847],[127.9494,36.8829],[127.9455,36.8735],[127.9567,36.8684],[127.9627,36.8616],[127.9694,36.8593],[127.9669,36.8509],[127.9765,36.8369],[127.9717,36.8263],[127.976,36.8237],[127.9818,36.8234],[127.9824,36.816],[127.9926,36.8127],[127.9978,36.8129],[128.0116,36.8068],[128.0175,36.8081],[128.0234,36.8142],[128.024,36.826],[128.0355,36.825],[128.0422,36.8206],[128.0472,36.8222],[128.0592,36.8164],[128.0568,36.8091],[128.058,36.807],[128.054,36.8052],[128.0561,36.7984],[128.055,36.7927],[128.0488,36.7836],[128.0456,36.7824],[128.0469,36.7786],[128.0448,36.7711],[128.0324,36.7552],[128.0323,36.7476],[128.0507,36.7367],[128.0556,36.7304],[128.0573,36.7311],[128.068,36.7222],[128.0727,36.7119],[128.0704,36.7077],[128.049,36.708],[128.0319,36.7188],[128.0256,36.7193],[128.0209,36.7219],[128.0148,36.7302],[128.0094,36.7284],[128.0019,36.7173],[127.9869,36.7176],[127.9802,36.7201],[127.9732,36.7262],[127.9707,36.7309],[127.9632,36.7334],[127.9605,36.7372],[127.957,36.7356],[127.9536,36.7227],[127.9492,36.7199],[127.9495,36.7081],[127.9465,36.7062],[127.9336,36.7065],[127.9309,36.7014],[127.9316,36.6944],[127.9289,36.6908],[127.9175,36.6932],[127.8939,36.6944],[127.8873,36.6912],[127.8819,36.6857],[127.882,36.6835],[127.8747,36.6826],[127.88,36.6787],[127.8876,36.6786],[127.8915,36.6824],[127.8952,36.6811],[127.9004,36.6822],[127.913,36.6777],[127.9177,36.6679],[127.9296,36.6688],[127.9322,36.6645],[127.9316,36.6554],[127.9391,36.6527],[127.9392,36.6471],[127.9343,36.6411],[127.9338,36.6361],[127.936,36.633],[127.932,36.6252],[127.9324,36.6187],[127.9241,36.6155],[127.9252,36.6028],[127.924,36.602],[127.92,36.6011],[127.9188,36.6087],[127.9118,36.6145],[127.9072,36.6258],[127.9027,36.6275],[127.8973,36.6267],[127.8893,36.6297],[127.8879,36.6349],[127.8892,36.6398],[127.8824,36.6465],[127.8797,36.6568],[127.8739,36.6551],[127.8723,36.6502],[127.8635,36.6407],[127.8613,36.6356],[127.8468,36.634],[127.8506,36.6313],[127.8478,36.6249],[127.8498,36.6196],[127.8557,36.6176],[127.8583,36.6135],[127.8562,36.6123],[127.8498,36.6131],[127.8407,36.6083],[127.8322,36.6126],[127.8267,36.6114],[127.821,36.6133],[127.8209,36.6105],[127.8181,36.6084],[127.8119,36.6074],[127.802,36.6018],[127.7985,36.6021],[127.7918,36.6103],[127.7863,36.6138],[127.7814,36.6088],[127.7695,36.604],[127.7646,36.6131],[127.7502,36.6219],[127.75,36.6254],[127.74,36.6332],[127.7381,36.6413],[127.7348,36.6397],[127.7258,36.6447],[127.7234,36.6513],[127.7127,36.6503],[127.7094,36.654],[127.7123,36.6572],[127.7103,36.6628],[127.7126,36.6677],[127.725,36.6752],[127.7271,36.6825],[127.7249,36.6819],[127.714,36.6899],[127.7137,36.6952],[127.7022,36.7038],[127.7019,36.7099],[127.6927,36.7121],[127.6869,36.7205],[127.6838,36.7173],[127.6796,36.7171],[127.6621,36.7325],[127.6511,36.7344],[127.65,36.7327],[127.6397,36.732],[127.636,36.7413],[127.6355,36.7521],[127.6242,36.7605],[127.6287,36.7725],[127.6272,36.7766],[127.6208,36.7786],[127.6209,36.7879],[127.6255,36.7893],[127.6274,36.7932],[127.6361,36.7943],[127.6419,36.8007],[127.634,36.8073],[127.635,36.8128],[127.6301,36.8162],[127.6298,36.8187],[127.6303,36.8287],[127.6386,36.8411],[127.6378,36.8487],[127.642,36.8558],[127.6481,36.8595],[127.6565,36.8607],[127.6656,36.8581],[127.6778,36.8509],[127.6865,36.8599],[127.6859,36.8685],[127.6898,36.8715],[127.694,36.88],[127.6982,36.8803],[127.7077,36.8759],[127.7086,36.8784],[127.7145,36.8788],[127.7162,36.8772],[127.7252,36.8801],[127.7304,36.8785],[127.7352,36.8799],[127.7454,36.878],[127.7505,36.8733],[127.7586,36.8738],[127.7625,36.8775],[127.7667,36.8748],[127.7708,36.8776],[127.7877,36.8806],[127.7893,36.8855],[127.7871,36.8945],[127.7924,36.8994],[127.7849,36.9059],[127.7918,36.9068],[127.7914,36.9042],[127.7966,36.903],[127.7983,36.9086],[127.7944,36.9162],[127.7867,36.9158],[127.7841,36.9176],[127.7815,36.9242],[127.7884,36.9268],[127.788,36.9372],[127.7927,36.9395],[127.7949,36.9459],[127.8007,36.9475],[127.8066,36.946]]]}},{"type":"Feature","properties":{"zscode":"43770","name":"음성군","center":[36.9763,127.6142]},"geometry":{"type":"Polygon","coordinates":[[[127.6621,37.1392],[127.6702,37.1361],[127.6868,37.1351],[127.6955,37.1404],[127.7064,37.1371],[127.7105,37.1341],[127.712,37.1278],[127.7205,37.1231],[127.7229,37.1159],[127.7205,37.1107],[127.7019,37.103],[127.6982,37.0994],[127.6992,37.0916],[127.6934,37.0855],[127.6922,37.0813],[127.6866,37.081],[127.6835,37.0781],[127.6829,37.0759],[127.6871,37.0713],[127.6912,37.0531],[127.6856,37.0474],[127.672,37.0402],[127.672,37.0347],[127.6643,37.0306],[127.6646,37.0232],[127.6563,37.0159],[127.6599,37.0081],[127.6655,37.0031],[127.6591,37.0035],[127.6551,37.0014],[127.6526,36.9917],[127.6537,36.9866],[127.6511,36.9828],[127.6618,36.9774],[127.6671,36.9787],[127.6691,36.9827],[127.6638,36.9838],[127.6684,36.9876],[127.6721,36.9859],[127.6863,36.9859],[127.6866,36.9815],[127.6941,36.9786],[127.6945,36.975],[127.7021,36.9727],[127.7058,36.9658],[127.7163,36.9584],[127.7268,36.959],[127.73,36.958],[127.7329,36.9537],[127.7393,36.9524],[127.7529,36.9579],[127.7626,36.9485],[127.7639,36.9408],[127.7741,36.9338],[127.781,36.9349],[127.7844,36.9377],[127.788,36.9372],[127.7888,36.9275],[127.7815,36.9242],[127.7841,36.9176],[127.7867,36.9158],[127.7944,36.9162],[127.7983,36.9083],[127.7966,36.903],[127.7914,36.9042],[127.7918,36.9068],[127.7849,36.9059],[127.7924,36.8994],[127.7871,36.8945],[127.7893,36.8855],[127.7877,36.8806],[127.7708,36.8776],[127.7667,36.8748],[127.7625,36.8775],[127.7586,36.8738],[127.7505,36.8733],[127.7454,36.878],[127.7352,36.8799],[127.7304,36.8785],[127.7252,36.8801],[127.7162,36.8772],[127.7145,36.8788],[127.7086,36.8784],[127.7077,36.8759],[127.6982,36.8803],[127.694,36.88],[127.6898,36.8715],[127.6859,36.8685],[127.6865,36.8599],[127.6778,36.8509],[127.6614,36.8598],[127.6524,36.8609],[127.642,36.8558],[127.6375,36.8469],[127.6264,36.8425],[127.6238,36.8356],[127.6208,36.8368],[127.6156,36.8339],[127.6134,36.8365],[127.6115,36.8478],[127.6159,36.8536],[127.6166,36.8587],[127.6067,36.8532],[127.5965,36.8516],[127.5919,36.8574],[127.587,36.8573],[127.5836,36.8601],[127.5785,36.8577],[127.5783,36.8533],[127.5756,36.8578],[127.5778,36.8625],[127.5766,36.8647],[127.5851,36.8702],[127.585,36.8746],[127.5778,36.8798],[127.5723,36.8774],[127.5686,36.8857],[127.567,36.886],[127.5667,36.8827],[127.5627,36.8822],[127.5606,36.8849],[127.5556,36.8862],[127.5552,36.8913],[127.5519,36.8939],[127.5537,36.896],[127.5531,36.8989],[127.5463,36.901],[127.546,36.9034],[127.5338,36.912],[127.5275,36.911],[127.5194,36.9229],[127.5137,36.9256],[127.5114,36.9306],[127.4999,36.9332],[127.4928,36.9388],[127.4861,36.9387],[127.4812,36.9337],[127.4766,36.9364],[127.4706,36.9362],[127.4665,36.9392],[127.4635,36.9484],[127.4568,36.9473],[127.4473,36.9499],[127.4454,36.9588],[127.4464,36.9614],[127.4484,36.9632],[127.4549,36.9607],[127.4573,36.9639],[127.454,36.9698],[127.4539,36.9741],[127.4493,36.977],[127.4503,36.9819],[127.4481,36.9899],[127.4505,36.9951],[127.4479,36.9985],[127.449,37.0098],[127.4471,37.012],[127.4509,37.0193],[127.4537,37.0213],[127.4584,37.0205],[127.4597,37.0251],[127.4569,37.03],[127.4597,37.0381],[127.4569,37.0422],[127.4612,37.0468],[127.4684,37.0504],[127.4682,37.0535],[127.4862,37.0549],[127.4998,37.0476],[127.5089,37.0494],[127.5116,37.0556],[127.5183,37.0584],[127.5225,37.0556],[127.5294,37.0555],[127.5347,37.052],[127.5411,37.0507],[127.5568,37.0412],[127.5695,37.0482],[127.565,37.0606],[127.578,37.0753],[127.5831,37.0755],[127.5893,37.0728],[127.5963,37.0737],[127.6047,37.0688],[127.6049,37.0761],[127.6011,37.0799],[127.5995,37.0858],[127.5951,37.088],[127.6119,37.0872],[127.6318,37.0965],[127.6345,37.0998],[127.6341,37.1073],[127.6362,37.1139],[127.6331,37.1202],[127.6378,37.1412],[127.6274,37.1517],[127.6283,37.1553],[127.6468,37.1511],[127.6621,37.1392]]]}},{"type":"Feature","properties":{"zscode":"43800","name":"단양군","center":[36.9946,128.388]},"geometry":{"type":"Polygon","coordinates":[[[128.3925,37.1534],[128.3964,37.1485],[128.4009,37.1469],[128.4037,37.1396],[128.4008,37.1333],[128.396,37.1286],[128.4058,37.127],[128.411,37.1221],[128.4185,37.1198],[128.4211,37.1137],[128.4236,37.1122],[128.4226,37.1047],[128.4247,37.1025],[128.4301,37.1037],[128.4306,37.1067],[128.4356,37.1095],[128.4352,37.1113],[128.4453,37.1075],[128.4512,37.1121],[128.458,37.1103],[128.4778,37.1101],[128.4911,37.1238],[128.4966,37.1258],[128.51,37.114],[128.5142,37.1037],[128.5312,37.1],[128.5341,37.0981],[128.5356,37.0919],[128.5381,37.0896],[128.5539,37.0866],[128.5617,37.0902],[128.5707,37.086],[128.5744,37.0813],[128.5817,37.0817],[128.5918,37.0782],[128.595,37.0815],[128.6016,37.0831],[128.601,37.0789],[128.6064,37.0767],[128.6226,37.0874],[128.6283,37.0813],[128.6282,37.0752],[128.6427,37.0708],[128.6521,37.0654],[128.6379,37.0515],[128.6329,37.0405],[128.6228,37.0453],[128.6217,37.0491],[128.6084,37.0528],[128.6068,37.0434],[128.6016,37.0441],[128.5968,37.0418],[128.5835,37.0437],[128.5777,37.0356],[128.5716,37.0356],[128.5656,37.0315],[128.5669,37.026],[128.5729,37.0208],[128.5691,37.0128],[128.5568,37.0057],[128.5547,36.9983],[128.543,36.9921],[128.5297,36.9908],[128.5155,36.9868],[128.5146,36.9776],[128.5064,36.9732],[128.5067,36.9701],[128.4864,36.9622],[128.4849,36.9575],[128.477,36.9574],[128.4672,36.9515],[128.4628,36.9474],[128.4634,36.9438],[128.4604,36.934],[128.4418,36.9274],[128.4447,36.9137],[128.4382,36.8998],[128.4268,36.8892],[128.4282,36.8848],[128.424,36.8765],[128.4364,36.8736],[128.4491,36.8629],[128.4467,36.8534],[128.449,36.8478],[128.447,36.8436],[128.4415,36.8376],[128.4341,36.8341],[128.4321,36.8241],[128.4211,36.8118],[128.4034,36.8121],[128.3944,36.8149],[128.3833,36.8138],[128.3733,36.8077],[128.3684,36.8021],[128.3641,36.8022],[128.3571,36.8063],[128.3568,36.8106],[128.3532,36.8124],[128.3345,36.817],[128.3165,36.8167],[128.3158,36.8228],[128.2956,36.8353],[128.2866,36.845],[128.2825,36.856],[128.2762,36.8571],[128.2686,36.8603],[128.265,36.8641],[128.2543,36.8664],[128.2418,36.8723],[128.2439,36.88],[128.2509,36.8847],[128.2438,36.891],[128.2462,36.905],[128.2367,36.9166],[128.2363,36.9336],[128.247,36.9379],[128.2448,36.9419],[128.2474,36.9446],[128.2529,36.9427],[128.2598,36.9487],[128.2635,36.9495],[128.2645,36.9523],[128.2597,36.9549],[128.2657,36.9611],[128.2616,36.9677],[128.257,36.9847],[128.2585,36.9933],[128.2539,36.9975],[128.2576,37.0001],[128.2561,37.0055],[128.2399,37.0241],[128.228,37.0245],[128.2251,37.0272],[128.2244,37.0343],[128.2171,37.0374],[128.22,37.0416],[128.219,37.0458],[128.2211,37.0496],[128.2179,37.0543],[128.2219,37.0561],[128.2254,37.0623],[128.2368,37.0654],[128.2394,37.0736],[128.2468,37.0769],[128.2492,37.0751],[128.2552,37.082],[128.2623,37.0828],[128.2695,37.0876],[128.2623,37.0903],[128.2615,37.0957],[128.2564,37.1015],[128.2629,37.1075],[128.2669,37.1086],[128.2674,37.1135],[128.2708,37.1159],[128.2776,37.1158],[128.2778,37.1108],[128.2805,37.1081],[128.2821,37.1089],[128.2871,37.1022],[128.2939,37.0981],[128.3038,37.1003],[128.309,37.1119],[128.3084,37.1145],[128.3042,37.1173],[128.3035,37.1289],[128.2983,37.1342],[128.3064,37.1375],[128.3095,37.1449],[128.3217,37.1489],[128.3247,37.1481],[128.3275,37.1529],[128.3307,37.1503],[128.3348,37.1565],[128.3385,37.1581],[128.3426,37.1559],[128.3515,37.1574],[128.3597,37.1502],[128.3644,37.1564],[128.3765,37.1524],[128.3841,37.158],[128.3925,37.1534]]]}},{"type":"Feature","properties":{"zscode":"43745","name":"증평군","center":[36.7864,127.6046]},"geometry":{"type":"Polygon","coordinates":[[[127.5836,36.86],[127.587,36.8573],[127.5919,36.8574],[127.5965,36.8516],[127.6067,36.8532],[127.6166,36.8587],[127.6159,36.8536],[127.6115,36.8478],[127.6134,36.8365],[127.6156,36.8339],[127.6208,36.8368],[127.6238,36.8356],[127.6264,36.8425],[127.6352,36.8472],[127.6375,36.8469],[127.6392,36.8436],[127.6308,36.8302],[127.6298,36.8187],[127.6301,36.8162],[127.635,36.8128],[127.634,36.8073],[127.6419,36.8007],[127.6361,36.7943],[127.6274,36.7932],[127.6255,36.7893],[127.6209,36.7879],[127.6205,36.7794],[127.6275,36.7764],[127.6282,36.7702],[127.6242,36.7605],[127.6355,36.7521],[127.636,36.7413],[127.6389,36.7326],[127.6543,36.7344],[127.6621,36.7325],[127.6645,36.7299],[127.6614,36.7223],[127.6627,36.715],[127.6512,36.702],[127.6424,36.7026],[127.6412,36.7057],[127.6352,36.7088],[127.6274,36.7075],[127.623,36.7046],[127.6179,36.7074],[127.6188,36.7163],[127.6157,36.7197],[127.6138,36.7265],[127.6096,36.7302],[127.6106,36.7353],[127.6061,36.7434],[127.6036,36.7458],[127.5983,36.7442],[127.5908,36.7476],[127.5903,36.7531],[127.5872,36.7554],[127.5889,36.7606],[127.5841,36.7619],[127.5791,36.767],[127.5751,36.7674],[127.5676,36.7738],[127.5647,36.7827],[127.5553,36.7991],[127.5481,36.7983],[127.5373,36.8086],[127.5448,36.8135],[127.55,36.8129],[127.5557,36.8174],[127.5737,36.8214],[127.5792,36.8282],[127.5783,36.8296],[127.5714,36.8279],[127.5692,36.83],[127.5702,36.8336],[127.5687,36.8385],[127.5727,36.8413],[127.5716,36.8439],[127.5734,36.8472],[127.5715,36.8501],[127.5782,36.8518],[127.5785,36.8577],[127.5836,36.86]]]}}]}</script>
+<script type="application/json" id="prices">{"tiers":[30,50,100,200,null],"aliases":{"기후부":"기후에너지환경부","환경부":"기후에너지환경부","한국환경공단":"기후에너지환경부","한국전력":"한국전력공사","차지비":"GS차지비","LG유플러스":"LG유플러스볼트업","엘지유플러스":"LG유플러스볼트업","파워큐브코리아":"파워큐브","HUMAXEV":"휴맥스이브이","휴맥스EV":"휴맥스이브이","이브이시":"이브이시스","파킹클라우드":"아이파킹","스타코프스타코프":"스타코프"},"public":"기후에너지환경부","ops":{"기후에너지환경부":{"n":"기후에너지환경부","m":[295.0,307.2,325.6,348.4,393.1],"x":[295.0,307.2,325.6,348.4,393.1],"u":"2026-07-31","s":"무공해차 통합누리집"},"E1":{"n":"E1","m":[280.0,320.0,347.2,347.2,347.2],"x":[280.0,320.0,347.2,347.2,347.2],"u":"2026-08-06","s":"무공해차 통합누리집"},"GS차지비":{"n":"GS차지비","m":[295.0,307.0,325.0,345.0,null],"x":[470.0,470.0,470.0,470.0,null],"u":"2026-09-22","s":"무공해차 통합누리집"},"GS칼텍스":{"n":"GS칼텍스","m":[null,null,347.0,347.0,null],"x":[null,null,448.0,448.0,null],"u":"2026-09-07","s":"무공해차 통합누리집"},"KH에너지":{"n":"KH에너지","m":[null,null,316.3,338.4,381.9],"x":[null,null,325.6,348.4,393.1],"u":"2026-08-05","s":"무공해차 통합누리집"},"LG유플러스볼트업":{"n":"LG유플러스 볼트업","m":[295.0,295.0,350.0,350.0,350.0],"x":[450.0,450.0,450.0,450.0,450.0],"u":"2026-07-01","s":"무공해차 통합누리집"},"NICE인프라":{"n":"NICE인프라","m":[295.0,295.0,320.0,350.0,350.0],"x":[295.0,295.0,320.0,350.0,350.0],"u":"2026-08-03","s":"무공해차 통합누리집"},"SG생활안전":{"n":"SG생활안전","m":[315.0,315.0,350.0,350.0,350.0],"x":[450.0,450.0,450.0,450.0,450.0],"u":"2026-08-10","s":"무공해차 통합누리집"},"SK렌터카":{"n":"SK렌터카","m":[310.0,310.0,350.0,380.0,380.0],"x":[null,null,null,null,null],"u":"2026-03-13","s":"무공해차 통합누리집"},"SK시그넷":{"n":"SK시그넷","m":[null,null,null,347.0,347.0],"x":[null,null,null,395.0,395.0],"u":"2026-09-15","s":"무공해차 통합누리집"},"SK에너지":{"n":"SK에너지","m":[286.0,286.0,347.2,null,null],"x":[286.0,286.0,450.0,null,null],"u":"2026-03-13","s":"무공해차 통합누리집"},"SK일렉링크":{"n":"SK일렉링크","m":[295.0,295.0,391.0,391.0,391.0],"x":[590.0,590.0,590.0,590.0,590.0],"u":"2026-08-06","s":"무공해차 통합누리집"},"가온건설":{"n":"가온건설","m":[295.0,307.2,325.6,348.4,null],"x":[null,null,null,null,null],"u":"2026-08-11","s":"무공해차 통합누리집"},"광성계측기":{"n":"광성계측기","m":[245.0,245.0,320.0,null,null],"x":[null,null,null,null,null],"u":"2026-08-11","s":"무공해차 통합누리집"},"그리드위즈":{"n":"그리드위즈","m":[289.0,305.0,null,null,null],"x":[450.0,450.0,null,null,null],"u":"2026-08-06","s":"무공해차 통합누리집"},"그린전력":{"n":"그린전력","m":[324.4,324.4,347.2,null,null],"x":[null,null,null,null,null],"u":"2026-03-13","s":"무공해차 통합누리집"},"넥씽":{"n":"넥씽","m":[300.0,300.0,350.0,350.0,350.0],"x":[400.0,400.0,400.0,400.0,400.0],"u":"2026-08-06","s":"무공해차 통합누리집"},"농협경제지주신재생에너지센터":{"n":"농협경제지주 신재생에너지센터","m":[274.0,287.0,307.0,327.0,327.0],"x":[274.0,287.0,307.0,327.0,327.0],"u":"2026-08-06","s":"무공해차 통합누리집"},"뉴로모빌리티":{"n":"뉴로모빌리티","m":[280.0,280.0,324.0,324.0,324.0],"x":[280.0,280.0,324.0,324.0,324.0],"u":"2026-03-16","s":"무공해차 통합누리집"},"뉴텍솔루션":{"n":"뉴텍솔루션","m":[270.0,270.0,280.0,null,null],"x":[370.0,370.0,440.0,null,null],"u":"2026-08-07","s":"무공해차 통합누리집"},"대도엘앤씨":{"n":"대도엘앤씨","m":[350.0,370.0,380.0,420.0,450.0],"x":[350.0,400.0,420.0,450.0,500.0],"u":"2026-08-25","s":"무공해차 통합누리집"},"대성물류건설":{"n":"대성물류건설","m":[280.0,280.0,null,null,null],"x":[500.0,500.0,null,null,null],"u":"2026-04-30","s":"무공해차 통합누리집"},"대한송유관공사":{"n":"대한송유관공사","m":[490.0,null,324.4,300.0,null],"x":[490.0,null,324.4,300.0,null],"u":"2026-08-18","s":"무공해차 통합누리집"},"동양이엔피":{"n":"동양이엔피","m":[280.0,280.0,null,350.0,350.0],"x":[280.0,280.0,null,null,null],"u":"2026-03-13","s":"무공해차 통합누리집"},"두루스코이브이":{"n":"두루스코이브이","m":[250.0,250.0,340.0,null,null],"x":[350.0,350.0,400.0,null,null],"u":"2026-03-13","s":"무공해차 통합누리집"},"레드이엔지":{"n":"레드이엔지","m":[295.0,295.0,400.0,null,null],"x":[400.0,400.0,500.0,null,null],"u":"2026-09-02","s":"무공해차 통합누리집"},"롯데이노베이트":{"n":"롯데이노베이트","m":[null,null,360.0,380.0,380.0],"x":[null,null,500.0,500.0,500.0],"u":"2026-03-13","s":"무공해차 통합누리집"},"리셀파워":{"n":"리셀파워","m":[295.0,307.2,325.6,348.4,393.1],"x":[295.0,307.2,325.6,348.4,393.1],"u":"2026-08-06","s":"무공해차 통합누리집"},"매니지온":{"n":"매니지온","m":[230.0,230.0,null,324.4,324.4],"x":[400.0,400.0,null,400.0,400.0],"u":"2026-03-13","s":"무공해차 통합누리집"},"메가볼트":{"n":"메가볼트","m":[324.4,324.4,347.2,null,null],"x":[324.4,324.4,347.2,null,null],"u":"2026-05-08","s":"무공해차 통합누리집"},"모니트":{"n":"모니트","m":[295.0,307.2,325.6,348.4,393.1],"x":[295.0,307.2,325.6,348.4,393.1],"u":"2026-09-22","s":"무공해차 통합누리집"},"모던텍":{"n":"모던텍","m":[324.7,324.7,null,324.7,324.7],"x":[380.0,380.0,null,380.0,380.0],"u":"2026-03-13","s":"무공해차 통합누리집"},"모트렉스이브이":{"n":"모트렉스이브이","m":[250.0,320.0,320.0,350.0,350.0],"x":[295.0,345.0,345.0,365.0,365.0],"u":"2026-10-10","s":"무공해차 통합누리집"},"바이온에버":{"n":"바이온에버","m":[295.0,307.2,325.6,348.4,393.1],"x":[295.0,307.2,325.6,348.4,393.1],"u":"2026-07-30","s":"무공해차 통합누리집"},"보타리에너지":{"n":"보타리에너지","m":[286.7,286.7,324.4,347.2,347.2],"x":[286.7,286.7,324.4,347.2,347.2],"u":"2026-03-13","s":"무공해차 통합누리집"},"브라이트에너지파트너스":{"n":"브라이트에너지파트너스","m":[295.0,307.2,null,348.4,393.1],"x":[null,550.0,null,550.0,550.0],"u":"2026-08-05","s":"무공해차 통합누리집"},"블루네트웍스":{"n":"블루네트웍스","m":[324.4,324.4,null,347.2,347.2],"x":[324.4,324.4,null,347.2,347.2],"u":"2026-03-13","s":"무공해차 통합누리집"},"서울시":{"n":"서울시","m":[295.0,307.2,325.6,348.4,393.1],"x":[295.0,307.2,325.6,348.4,393.1],"u":"2026-10-12","s":"무공해차 통합누리집"},"서울씨엔지":{"n":"서울씨엔지","m":[295.0,295.0,350.0,350.0,350.0],"x":[450.0,450.0,450.0,450.0,450.0],"u":"2026-09-03","s":"무공해차 통합누리집"},"서현에너지":{"n":"서현에너지","m":[295.0,307.2,325.6,348.4,393.1],"x":[295.0,307.2,325.6,348.4,393.1],"u":"2026-07-30","s":"무공해차 통합누리집"},"선광시스템":{"n":"선광시스템","m":[null,null,325.6,null,null],"x":[null,null,325.6,null,null],"u":"2026-08-10","s":"무공해차 통합누리집"},"소프트베리":{"n":"소프트베리","m":[297.0,297.0,null,null,null],"x":[null,null,null,null,null],"u":"2026-03-13","s":"무공해차 통합누리집"},"스칼라데이터":{"n":"스칼라데이터","m":[295.0,307.2,325.6,348.4,393.1],"x":[398.0,398.0,398.0,398.0,398.0],"u":"2026-08-05","s":"무공해차 통합누리집"},"스타코프":{"n":"스타코프","m":[294.0,294.0,340.0,340.0,340.0],"x":[370.0,370.0,370.0,370.0,370.0],"u":"2026-09-09","s":"무공해차 통합누리집"},"신세계아이앤씨":{"n":"신세계아이앤씨","m":[null,null,324.0,null,null],"x":[null,null,455.0,null,null],"u":"2026-04-10","s":"무공해차 통합누리집"},"아론":{"n":"아론","m":[290.0,290.0,null,null,null],"x":[290.0,290.0,null,null,null],"u":"2026-05-08","s":"무공해차 통합누리집"},"아마노코리아":{"n":"아마노코리아","m":[276.0,276.0,null,330.0,330.0],"x":[440.0,440.0,null,440.0,440.0],"u":"2026-03-13","s":"무공해차 통합누리집"},"아우토크립트":{"n":"아우토크립트","m":[null,null,320.0,null,null],"x":[null,null,450.0,null,null],"u":"2026-08-05","s":"무공해차 통합누리집"},"아이마켓코리아":{"n":"아이마켓코리아","m":[310.0,null,330.0,324.4,null],"x":[310.0,null,380.0,324.4,null],"u":"2026-08-20","s":"무공해차 통합누리집"},"아이파킹":{"n":"아이파킹","m":[299.0,345.0,345.0,null,null],"x":[400.0,450.0,450.0,null,null],"u":"2026-08-05","s":"무공해차 통합누리집"},"아하":{"n":"아하","m":[260.0,260.0,null,330.0,330.0],"x":[350.0,350.0,null,400.0,400.0],"u":"2026-04-10","s":"무공해차 통합누리집"},"에바":{"n":"에바","m":[290.0,290.0,null,319.0,319.0],"x":[290.0,290.0,null,319.0,319.0],"u":"2026-07-31","s":"무공해차 통합누리집"},"에버온":{"n":"에버온","m":[296.0,296.0,296.0,296.0,296.0],"x":[380.0,380.0,380.0,380.0,380.0],"u":"2026-04-15","s":"무공해차 통합누리집"},"에스에스기전":{"n":"에스에스기전","m":[280.0,280.0,300.0,null,null],"x":[400.0,400.0,400.0,null,null],"u":"2026-03-13","s":"무공해차 통합누리집"},"에스이랩":{"n":"에스이랩","m":[230.0,230.0,null,null,null],"x":[340.0,340.0,null,null,null],"u":"2026-03-13","s":"무공해차 통합누리집"},"엔비플러스":{"n":"엔비플러스","m":[null,null,325.6,null,393.1],"x":[null,null,325.6,null,393.1],"u":"2026-08-06","s":"무공해차 통합누리집"},"엘에스이링크":{"n":"엘에스이링크","m":[null,null,null,319.0,319.0],"x":[null,null,null,319.0,319.0],"u":"2026-03-13","s":"무공해차 통합누리집"},"온스테이션":{"n":"온스테이션","m":[320.0,320.0,null,null,null],"x":[420.0,420.0,null,null,null],"u":"2026-08-06","s":"무공해차 통합누리집"},"왕산전기":{"n":"왕산전기","m":[null,null,380.0,380.0,null],"x":[null,null,380.0,380.0,null],"u":"2026-09-09","s":"무공해차 통합누리집"},"우진산전":{"n":"우진산전","m":[null,null,null,348.4,393.1],"x":[null,null,null,450.0,500.0],"u":"2026-10-07","s":"무공해차 통합누리집"},"유플러스아이티":{"n":"유플러스아이티","m":[290.0,null,320.0,320.0,null],"x":[295.0,null,400.0,400.0,null],"u":"2026-08-21","s":"무공해차 통합누리집"},"이브이루씨":{"n":"이브이루씨","m":[292.0,292.0,null,340.0,340.0],"x":[300.0,300.0,null,450.0,450.0],"u":"2026-03-24","s":"무공해차 통합누리집"},"이브이시스":{"n":"이브이시스","m":[310.0,324.0,360.0,380.0,380.0],"x":[550.0,550.0,550.0,550.0,550.0],"u":"2026-05-11","s":"무공해차 통합누리집"},"이브이씨코리아":{"n":"이브이씨코리아","m":[295.0,null,null,null,null],"x":[295.0,null,null,null,null],"u":"2026-08-06","s":"무공해차 통합누리집"},"이앤에이치에너지":{"n":"이앤에이치에너지","m":[294.0,294.0,null,324.4,324.4],"x":[370.0,370.0,null,370.0,370.0],"u":"2026-06-25","s":"무공해차 통합누리집"},"이에스앤에이치":{"n":"이에스앤에이치","m":[295.0,307.2,null,348.4,null],"x":[295.0,307.2,null,348.4,null],"u":"2026-10-19","s":"무공해차 통합누리집"},"이엘일렉트릭":{"n":"이엘일렉트릭","m":[260.0,280.0,320.0,320.0,340.0],"x":[480.0,480.0,480.0,480.0,480.0],"u":"2026-08-06","s":"무공해차 통합누리집"},"이웨이브":{"n":"이웨이브","m":[324.4,324.4,347.2,347.2,347.2],"x":[430.0,430.0,430.0,430.0,430.0],"u":"2026-07-27","s":"무공해차 통합누리집"},"이지차저":{"n":"이지차저","m":[289.0,289.0,289.0,289.0,289.0],"x":[450.0,450.0,450.0,450.0,450.0],"u":"2026-08-06","s":"무공해차 통합누리집"},"이지트로닉스":{"n":"이지트로닉스","m":[294.3,306.0,324.4,347.2,391.9],"x":[450.0,450.0,500.0,500.0,500.0],"u":"2026-06-17","s":"무공해차 통합누리집"},"이카플러그":{"n":"이카플러그","m":[275.0,275.0,null,null,null],"x":[null,null,null,null,null],"u":"2026-03-13","s":"무공해차 통합누리집"},"인천국제공항공사":{"n":"인천국제공항공사","m":[295.0,307.2,325.6,348.4,393.1],"x":[295.0,307.2,325.6,348.4,393.1],"u":"2026-07-27","s":"무공해차 통합누리집"},"인큐버스":{"n":"인큐버스","m":[null,null,325.6,null,null],"x":[null,null,400.0,null,null],"u":"2026-08-06","s":"무공해차 통합누리집"},"일렉트리":{"n":"일렉트리","m":[295.0,307.2,325.6,348.4,393.1],"x":[295.0,307.2,325.6,348.4,393.1],"u":"2026-08-06","s":"무공해차 통합누리집"},"제주전기자동차서비스":{"n":"제주전기자동차서비스","m":[280.0,280.0,320.0,340.0,340.0],"x":[480.0,480.0,480.0,480.0,480.0],"u":"2026-03-13","s":"무공해차 통합누리집"},"차밥스":{"n":"차밥스","m":[300.0,300.0,400.0,400.0,null],"x":[324.4,324.4,400.0,400.0,null],"u":"2026-08-05","s":"무공해차 통합누리집"},"채비":{"n":"채비","m":[289.0,315.0,410.0,430.0,430.0],"x":[590.0,590.0,590.0,590.0,590.0],"u":"2026-10-19","s":"채비 홈페이지"},"캐스트프로":{"n":"캐스트프로","m":[324.4,324.4,null,null,null],"x":[324.4,324.4,null,null,null],"u":"2026-03-13","s":"무공해차 통합누리집"},"쿨사인":{"n":"쿨사인","m":[324.4,324.4,347.2,null,null],"x":[324.4,324.4,347.2,null,null],"u":"2026-03-13","s":"무공해차 통합누리집"},"크로커스":{"n":"크로커스","m":[242.0,242.0,330.0,330.0,330.0],"x":[360.0,360.0,380.0,380.0,450.0],"u":"2026-09-29","s":"무공해차 통합누리집"},"클린일렉스":{"n":"클린일렉스","m":[287.0,287.0,317.0,339.0,382.0],"x":[295.0,295.0,382.0,382.0,382.0],"u":"2026-08-11","s":"무공해차 통합누리집"},"타디스테크놀로지":{"n":"타디스테크놀로지","m":[317.0,324.0,324.0,347.0,347.0],"x":[324.0,430.0,430.0,430.0,430.0],"u":"2026-07-29","s":"무공해차 통합누리집"},"태성콘텍":{"n":"태성콘텍","m":[250.0,250.0,null,324.4,324.4],"x":[460.0,460.0,null,460.0,460.0],"u":"2026-03-13","s":"무공해차 통합누리집"},"티맵":{"n":"티맵","m":[350.0,350.0,420.0,420.0,420.0],"x":[350.0,350.0,420.0,420.0,420.0],"u":"2026-08-24","s":"무공해차 통합누리집"},"파워큐브":{"n":"파워큐브","m":[319.0,319.0,null,null,null],"x":[null,null,null,null,null],"u":"2026-03-13","s":"무공해차 통합누리집"},"펌프킨":{"n":"펌프킨","m":[324.4,324.4,null,347.2,347.2],"x":[407.0,407.0,null,400.0,400.0],"u":"2026-09-30","s":"무공해차 통합누리집"},"플러그링크":{"n":"플러그링크","m":[292.0,322.0,322.0,345.0,345.0],"x":[357.0,528.0,528.0,528.0,528.0],"u":"2026-07-31","s":"무공해차 통합누리집"},"피라인모터스":{"n":"피라인모터스","m":[250.0,250.0,300.0,null,null],"x":[250.0,250.0,320.0,null,null],"u":"2026-03-13","s":"무공해차 통합누리집"},"한국EV충전서비스센터":{"n":"한국EV충전서비스센터","m":[400.0,400.0,400.0,null,null],"x":[400.0,400.0,400.0,null,null],"u":"2026-03-13","s":"무공해차 통합누리집"},"한국동서발전":{"n":"한국동서발전","m":[null,null,313.0,null,null],"x":[null,null,383.0,null,null],"u":"2026-07-22","s":"무공해차 통합누리집"},"한국자동차환경협회":{"n":"한국자동차환경협회","m":[295.0,307.2,325.6,348.4,393.1],"x":[295.0,307.2,325.6,348.4,393.1],"u":"2026-08-04","s":"무공해차 통합누리집"},"한국전기차인프라기술":{"n":"한국전기차인프라기술","m":[288.0,288.0,324.4,347.2,347.2],"x":[380.0,380.0,380.0,380.0,380.0],"u":"2026-03-13","s":"무공해차 통합누리집"},"한국전기차충전서비스":{"n":"한국전기차충전서비스","m":[298.0,298.0,398.0,398.0,398.0],"x":[550.0,550.0,550.0,550.0,550.0],"u":"2026-08-18","s":"무공해차 통합누리집"},"한국전력공사":{"n":"한국전력공사","m":[295.0,307.2,325.6,348.4,393.1],"x":[295.0,307.2,325.6,348.4,393.1],"u":"2026-09-10","s":"무공해차 통합누리집"},"한국홈충전":{"n":"한국홈충전","m":[330.0,330.0,380.0,null,null],"x":[330.0,330.0,380.0,null,null],"u":"2026-08-06","s":"무공해차 통합누리집"},"한마음장애인복지회":{"n":"한마음장애인복지회","m":[324.4,324.4,347.2,null,null],"x":[324.4,324.4,347.2,null,null],"u":"2026-03-13","s":"무공해차 통합누리집"},"한솔엠에스":{"n":"한솔엠에스","m":[null,null,null,null,null],"x":[470.0,470.0,null,470.0,470.0],"u":"2026-03-13","s":"무공해차 통합누리집"},"한화솔루션":{"n":"한화솔루션","m":[283.0,283.0,null,352.0,352.0],"x":[341.0,341.0,null,504.0,504.0],"u":"2026-03-13","s":"무공해차 통합누리집"},"현대엔지니어링":{"n":"현대엔지니어링","m":[290.0,290.0,350.0,350.0,390.0],"x":[400.0,400.0,500.0,500.0,500.0],"u":"2026-09-07","s":"무공해차 통합누리집"},"현대자동차":{"n":"현대자동차","m":[null,null,null,460.0,null],"x":[null,null,null,530.0,null],"u":"2026-07-28","s":"무공해차 통합누리집"},"현승":{"n":"현승","m":[295.0,307.2,325.6,348.4,393.1],"x":[320.0,330.0,370.0,390.0,440.0],"u":"2026-09-22","s":"무공해차 통합누리집"},"휴맥스이브이":{"n":"휴맥스이브이","m":[280.0,280.0,320.0,340.0,340.0],"x":[480.0,480.0,480.0,480.0,480.0],"u":"2026-08-06","s":"무공해차 통합누리집"}}}</script>
+<script>
+(() => {
+"use strict";
+// ───────────────────────── 설정 (저장소 config.py와 같은 값) ─────────────────────────
+const REGIONS = [
+  { name: "청주시", code: "43110", center: [36.6424, 127.4890] },
+  { name: "충주시", code: "43130", center: [36.9910, 127.9259] },
+  { name: "제천시", code: "43150", center: [37.1326, 128.1910] },
+  { name: "보은군", code: "43720", center: [36.4894, 127.7295] },
+  { name: "옥천군", code: "43730", center: [36.3064, 127.5713] },
+  { name: "영동군", code: "43740", center: [36.1750, 127.7834] },
+  { name: "증평군", code: "43745", center: [36.7853, 127.5815] },
+  { name: "진천군", code: "43750", center: [36.8554, 127.4356] },
+  { name: "괴산군", code: "43760", center: [36.8153, 127.7866] },
+  { name: "음성군", code: "43770", center: [36.9401, 127.6905] },
+  { name: "단양군", code: "43800", center: [36.9845, 128.3655] },
+];
+const SLOW_TYPES = new Set(["02", "08"]);
+const FAST_TYPES = new Set(["01", "03", "04", "05", "06", "07", "09", "10"]);
+const FAST_OUTPUT_KW = 30;
+const DEFAULT_KW = { 급속: 50, 완속: 7, 기타: 7 };
+// 운영사별 실제 충전요금 (data/operator_prices.csv → 빌드 때 삽입, 규칙은 utils/prices.py와 같음)
+const PRICES = JSON.parse(document.getElementById("prices").textContent);
+const TIER_UP = PRICES.tiers.map(u => u ?? Infinity);
+const KIND = { A0: "공공시설", B0: "주차시설", C0: "휴게시설", D0: "관광시설", E0: "상업시설", F0: "차량정비시설",
+               G0: "기타시설", H0: "공동주택시설", I0: "근린생활시설", J0: "교육문화시설" };
+const BANDS = [{ s: 11, e: 14, m: 0.90, label: "태양광 피크 할인" }, { s: 18, e: 22, m: 1.05, label: "저녁 피크 할증" }];
+const STATUS = ["여유", "보통", "혼잡", "불가", "미확인"];
+const STATUS_LABEL = { 여유: "여유", 보통: "보통", 혼잡: "혼잡", 불가: "이용 불가", 미확인: "상태 미확인" };
+
+// ───────────────────────── 요금 로직 (utils/logic.py 이식) ─────────────────────────
+const tierIndex = kw => { const i = TIER_UP.findIndex(up => kw < up); return i < 0 ? TIER_UP.length - 1 : i; };
+const normOp = name => {
+  const s = String(name || "").replace(/\(주\)|㈜|주식회사|\(유\)|유한회사/g, "").replace(/\([^)]*\)/g, "").replace(/\s+/g, "").toUpperCase();
+  return PRICES.aliases[s] || s;
+};
+const pickTier = (vals, i) => {
+  if (vals[i] != null) return { v: vals[i], exact: true };
+  for (let d = 1; d < vals.length; d++) for (const j of [i - d, i + d]) if (j >= 0 && j < vals.length && vals[j] != null) return { v: vals[j], exact: false };
+  return null;
+};
+// 충전기 한 대의 회원 단가: 운영사 해당 구간 → 같은 운영사 인접 구간 → 공공 단가(미등재)
+function priceFor(busi, kw) {
+  const i = tierIndex(kw > 0 ? kw : 7), op = PRICES.ops[normOp(busi)];
+  const m = op && pickTier(op.m, i), x = op && pickTier(op.x, i);
+  if (m) return { base: m.v, src: m.exact ? "운영사" : "운영사(인접 구간)", op: op.n, upd: op.u, from: op.s, non: x ? x.v : null };
+  const pub = PRICES.ops[PRICES.public];
+  return { base: pub.m[i], src: "공공 기준(미등재)", op: pub.n, upd: pub.u, from: pub.s, non: null };
+}
+const publicRate = kw => PRICES.ops[PRICES.public].m[tierIndex(kw)];
+const classifySpeed = (t, kw) => SLOW_TYPES.has(t) ? "완속" : FAST_TYPES.has(t) ? "급속" : kw > 0 ? (kw >= FAST_OUTPUT_KW ? "급속" : "완속") : "기타";
+function classifyStatus(avail, charging, fault, th) {
+  const usable = avail + charging;
+  if (usable === 0) return fault > 0 ? "불가" : "미확인";
+  if (avail / usable >= th) return "여유";
+  return avail > 0 ? "보통" : "혼잡";
+}
+const congestionMult = (s, p) => ({ 여유: 1 - p.disc, 보통: 1, 혼잡: 1 + p.sur })[s] ?? null;
+function timeMult(h, p) {
+  if (!p.tod) return { m: 1, label: "" };
+  for (const b of BANDS) if (b.s < b.e ? (h >= b.s && h < b.e) : (h >= b.s || h < b.e)) return { m: b.m, label: b.label };
+  return { m: 1, label: "" };
+}
+const round1 = v => Math.round(v * 10) / 10;
+
+function prepare(rows, excludeLimited) {
+  const seen = new Set(), out = [];
+  for (const r of rows) {
+    const t = k => (r[k] == null ? "" : String(r[k]).trim());
+    const T = k => { const v = t(k); return /^(null|none|nan)$/i.test(v) ? "" : v; };
+    if (T("delYn").toUpperCase() === "Y") continue;
+    const lat = +r.lat, lng = +r.lng;
+    if (!(lat >= 33 && lat <= 39 && lng >= 124 && lng <= 132)) continue;
+    const key = T("statId") + "|" + T("chgerId");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const limited = T("limitYn").toUpperCase() === "Y";
+    if (excludeLimited && limited) continue;
+    let type = T("chgerType"); if (type) type = type.padStart(2, "0");
+    const outKw = parseFloat(r.output);
+    const speed = classifySpeed(type, outKw > 0 ? outKw : 0);
+    const kw = outKw > 0 ? outKw : DEFAULT_KW[speed];
+    const stat = T("stat");
+    const kind = T("kind") || T("kindDetail").slice(0, 2);
+    const pf = T("parkingFree").toUpperCase();
+    out.push({
+      statId: T("statId"), name: T("statNm") || "이름 없음", addr: (T("addr") + " " + T("addrDetail")).trim(),
+      lat, lng, busi: T("busiNm") || "운영기관 미표기", facility: KIND[kind] || "기타시설",
+      parking: pf === "Y" ? "무료" : pf === "N" ? "유료" : "현장 확인", useTime: T("useTime"),
+      speed, kw, ...priceFor(T("busiNm"), kw), avail: stat === "2", charging: stat === "3", fault: ["1", "4", "5"].includes(stat),
+    });
+  }
+  return out;
+}
+
+function summarize(chargers, p, hour) {
+  const by = new Map();
+  const sub = () => ({ total: 0, avail: 0, charging: 0, fault: 0, base: 0, kw: 0, src: "", non: null, upd: "", status: "", price: null });
+  for (const c of chargers) {
+    let s = by.get(c.statId);
+    if (!s) {
+      s = { id: c.statId, name: c.name, addr: c.addr, lat: c.lat, lng: c.lng, busi: c.busi, facility: c.facility, parking: c.parking,
+            useTime: c.useTime, total: 0, avail: 0, charging: 0, fault: 0, fast: sub(), slow: sub(), alt: null };
+      by.set(c.statId, s);
+    }
+    s.total++; s.avail += c.avail; s.charging += c.charging; s.fault += c.fault;
+    if (c.speed !== "기타") {
+      const x = c.speed === "급속" ? s.fast : s.slow;
+      x.total++; x.avail += c.avail; x.charging += c.charging; x.fault += c.fault;
+      // 대표 단가: 가장 높은 출력 충전기의 운영사 단가
+      if (c.kw > x.kw || (c.kw === x.kw && c.base > x.base)) Object.assign(x, { kw: c.kw, base: c.base, src: c.src, non: c.non, upd: c.upd, from: c.from });
+    }
+  }
+  const tod = timeMult(hour, p);
+  const list = [...by.values()];
+  for (const s of list) {
+    s.status = classifyStatus(s.avail, s.charging, s.fault, p.th);
+    for (const x of [s.fast, s.slow]) {
+      if (!x.total) continue;
+      x.status = classifyStatus(x.avail, x.charging, x.fault, p.th);
+      const m = congestionMult(x.status, p);
+      x.mult = m; x.price = m == null ? null : round1(x.base * m * tod.m);
+    }
+    s.price = s.fast.price ?? s.slow.price;
+    s.ratio = (s.avail + s.charging) ? s.avail / (s.avail + s.charging) : null;
+  }
+  return { list, tod };
+}
+
+function haversine(a, b) {
+  const R = 6371, rad = Math.PI / 180;
+  const dLat = (b.lat - a.lat) * rad, dLng = (b.lng - a.lng) * rad;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+function recommend(list, radius) {
+  for (const s of list) s.alt = null;
+  for (const key of ["fast", "slow"]) {
+    const src = list.filter(s => (s.status === "혼잡" || s.status === "불가") && (key === "fast" ? s.fast.total > 0 : s.fast.total === 0));
+    const dst = list.filter(s => s[key].status === "여유");
+    for (const a of src) {
+      let best = null, bd = Infinity;
+      for (const b of dst) { if (b === a) continue; const d = haversine(a, b); if (d < bd) { bd = d; best = b; } }
+      if (best && bd <= radius) {
+        // 절약액 = 지금 거점 단가 − 옮겨 갈 거점 단가 (둘 다 운영사 실제 요금 × 혼잡 배수). 같은 속도끼리 비교.
+        const save = a[key].total > 0 && a[key].price != null && best[key].price != null ? a[key].price - best[key].price : null;
+        a.alt = { st: best, dist: bd, speed: key === "fast" ? "급속" : "완속", kw: best[key].kw, price: best[key].price, save };
+      }
+    }
+  }
+}
+
+// ───────────────────────── 지도 데이터 ─────────────────────────
+const GEO = JSON.parse(document.getElementById("geo").textContent);
+for (const f of GEO.features) {  // d3-geo는 시계 방향 외곽선을 기대하므로 필요하면 뒤집음
+  if (d3.geoArea(f) > 2 * Math.PI) {
+    const g = f.geometry;
+    if (g.type === "Polygon") g.coordinates.forEach(r => r.reverse());
+    else g.coordinates.forEach(p => p.forEach(r => r.reverse()));
+  }
+}
+const FEATURES = new Map(GEO.features.map(f => [f.properties.zscode, f]));
+const regionByCode = new Map(REGIONS.map(r => [r.code, r]));
+
+// ───────────────────────── 상태 ─────────────────────────
+const kstHour = () => (new Date().getUTCHours() + 9) % 24;
+const todayKST = () => new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
+const state = {
+  region: REGIONS[0], hour: kstHour(), live: {}, history: {}, server: false, loading: true, notice: "",
+  p: { th: 0.5, disc: 0.2, sur: 0.15, rad: 3, tod: false, lim: true },
+  hidden: new Set(), selected: null, sort: { key: "status", dir: 1 }, q: "",
+  view: null,
+};
+
+// 서버에서 받은 실제 데이터. 아직 없으면 null
+const external = (code = state.region.code) => state.live[code] || null;
+// 기록(서버의 /api/history) 한 시각분 → 충전기 목록 (prepare() 결과와 같은 모양)
+function chargersFromHistory(hist, slot) {
+  const out = [];
+  for (const [id, c] of Object.entries(slot.s)) {
+    const m = hist.stations[id];
+    if (!m) continue;
+    const base = { statId: id, name: m.n, addr: m.a || "", lat: m.la, lng: m.ln, busi: m.b, facility: m.f, parking: m.p, useTime: "" };
+    const add = (speed, kw, counts) => { const pr = priceFor(m.b, kw); ["a", "c", "f"].forEach((k, i) => {
+      for (let n = 0; n < counts[i]; n++) out.push({ ...base, speed, kw, ...pr, avail: k === "a", charging: k === "c", fault: k === "f" });
+    }); };
+    if (m.fk || m.fb) add("급속", m.fk || 50, c.slice(0, 3));
+    if (m.sk || m.sb) add("완속", m.sk || 7, c.slice(3, 6));
+  }
+  return out;
+}
+const congestedInSlot = slot => Object.values(slot.s).filter(c => c[0] + c[3] === 0 && c[1] + c[4] > 0).length;
+
+// 지금 상태가 해당하는 시각: 서버 모드는 현재 시각, 정적(GitHub Pages) 모드는 마지막 수집 시각
+const liveHour = (code = state.region.code) => state.live[code]?.hour ?? kstHour();
+
+function compute(hour = state.hour) {
+  const ext = external();
+  let chargers = null, replay = null, noRecord = false;
+  if (ext && hour !== liveHour()) {
+    const hist = state.history[state.region.code];
+    const slot = hist && hist.hours[String(hour)];
+    if (slot) { chargers = chargersFromHistory(hist, slot); replay = slot.t; } else noRecord = true;
+  }
+  if (!chargers && ext && ext.chargers) chargers = ext.chargers;
+  if (!chargers) chargers = prepare(ext ? ext.rows : [], state.p.lim);
+  const { list, tod } = summarize(chargers, state.p, hour);
+  recommend(list, state.p.rad);
+  return { list, tod, replay, noRecord };
+}
+
+// ───────────────────────── 지도 (Leaflet + OpenStreetMap 타일: 도로·지명) ─────────────────────────
+const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const C = { free: cssVar("--free"), mid: cssVar("--mid"), busy: cssVar("--busy"), down: cssVar("--down"),
+            ink: cssVar("--ink"), ink2: cssVar("--ink-2"), ink3: cssVar("--ink-3") };
+const DOT_STYLE = {
+  여유: { fillColor: C.free, color: "#fff", weight: 1.3, fillOpacity: 1 },
+  보통: { fillColor: C.mid, color: C.ink2, weight: 0.8, fillOpacity: 1 },
+  혼잡: { fillColor: C.busy, color: "#fff", weight: 1.3, fillOpacity: 1 },
+  불가: { fillColor: "#fff", color: C.down, weight: 2, fillOpacity: 1 },
+  미확인: { fillColor: "#fff", color: C.ink3, weight: 1.2, fillOpacity: 1, dashArray: "2 2" },
+};
+const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const ADMIN = /admin/i.test(location.hash + location.search);   // 관리자 확인용: https://…/#admin
+const map = L.map("map", { zoomControl: false, preferCanvas: true, minZoom: 8, maxZoom: 18, zoomSnap: 0.5 });
+map.attributionControl.setPrefix(false);
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> 기여자',
+}).addTo(map);
+const canvas = L.canvas({ padding: 0.4 });
+const regionStyle = f => f.properties.zscode === state.region.code
+  ? { color: C.ink, weight: 2.2, fill: false, interactive: false }
+  : { color: C.ink3, weight: 1, fillColor: "#ffffff", fillOpacity: 0.55, interactive: true };
+const regionLayer = L.geoJSON(GEO, {
+  style: regionStyle,
+  onEachFeature: (f, layer) => layer.on("click", () => {
+    if (f.properties.zscode !== state.region.code) setRegion(regionByCode.get(f.properties.zscode));
+  }),
+}).addTo(map);
+const labelLayer = L.layerGroup().addTo(map), linkLayer = L.layerGroup().addTo(map),
+      dotLayer = L.layerGroup().addTo(map), selLayer = L.layerGroup().addTo(map);
+const dotIndex = new Map();
+
+function fitRegion(animate = false) {
+  const b = L.geoJSON(FEATURES.get(state.region.code)).getBounds();
+  map.fitBounds(b, { padding: [24, 24], animate: animate && !reduced });
+}
+function fit() {
+  map.invalidateSize();
+  regionLayer.setStyle(regionStyle);
+  labelLayer.clearLayers();
+  for (const f of GEO.features) {
+    if (f.properties.zscode === state.region.code) continue;
+    const [lng, lat] = d3.geoCentroid(f);
+    labelLayer.addLayer(L.marker([lat, lng], { interactive: false, keyboard: false,
+      icon: L.divIcon({ className: "rlabel", html: `<span>${esc(f.properties.name)}</span>`, iconSize: [0, 0] }) }));
+  }
+  fitRegion(false);
+}
+
+function drawSelection() {
+  selLayer.clearLayers();
+  const s = state.selected && state.view.list.find(x => x.id === state.selected);
+  if (s) selLayer.addLayer(L.circleMarker([s.lat, s.lng], { renderer: canvas, radius: s.r + 4, color: C.ink, weight: 2, fill: false, interactive: false }));
+}
+
+function drawMap() {
+  const list = state.view.list;
+  for (const s of list) s.r = Math.min(3.6 + 1.3 * Math.sqrt(s.total), 9.5);
+  const order = { 미확인: 0, 불가: 1, 보통: 2, 여유: 3, 혼잡: 4 };
+  const shown = list.filter(s => !state.hidden.has(s.status)).sort((a, b) => order[a.status] - order[b.status]);
+  linkLayer.clearLayers(); dotLayer.clearLayers(); dotIndex.clear();
+  const links = state.p.rad > 0 ? shown.filter(s => s.alt && !state.hidden.has(s.alt.st.status)) : [];
+  for (const s of links) {
+    const a = [s.lat, s.lng], b = [s.alt.st.lat, s.alt.st.lng];
+    // 흰 테두리 위에 진한 점선: 지도 배경·점 색과 겹쳐도 잘 보이게
+    linkLayer.addLayer(L.polyline([a, b], { renderer: canvas, color: "#fff", weight: 6.5, opacity: 0.95, lineCap: "round", interactive: false }));
+    linkLayer.addLayer(L.polyline([a, b], { renderer: canvas, color: C.ink, weight: 3, dashArray: "7 5", opacity: 1, lineCap: "butt", interactive: false }));
+    const p1 = map.latLngToLayerPoint(a), p2 = map.latLngToLayerPoint(b);   // 메르카토르에서는 확대해도 각도가 같음
+    const deg = Math.atan2(p2.y - p1.y, p2.x - p1.x) * 180 / Math.PI;
+    const back = (s.alt.st.r || 6) + 18;
+    linkLayer.addLayer(L.marker(b, { interactive: false, keyboard: false, icon: L.divIcon({ className: "", iconSize: [0, 0],
+      html: `<svg class="arrow-head" width="18" height="18" viewBox="-2 -2 18 18" style="transform:rotate(${deg}deg) translate(-${back}px,-9px)"><path d="M0,0 L14,7 L0,14z"/></svg>` }) }));
+  }
+  for (const s of shown) {
+    const m = L.circleMarker([s.lat, s.lng], { renderer: canvas, radius: s.r, ...DOT_STYLE[s.status] })
+      .bindTooltip(`<b>${esc(s.name)}</b><br>${STATUS_LABEL[s.status]}${s.price != null ? ", " + s.price.toFixed(1) + "원/kWh" : ""}`,
+                   { direction: "top", offset: [0, -s.r], className: "dtip" })
+      .on("click", () => select(s.id));
+    dotLayer.addLayer(m); dotIndex.set(s.id, m);
+  }
+  if (!list.find(s => s.id === state.selected)) state.selected = null;
+  drawSelection();
+}
+
+function focusOn(s) {
+  map.setView([s.lat, s.lng], Math.max(map.getZoom(), 14), { animate: !reduced });
+}
+
+// ───────────────────────── 패널 ─────────────────────────
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const fmt = v => v == null ? "–" : v.toFixed(1);
+const COLOR_VAR = { 여유: "var(--free)", 보통: "var(--mid)", 혼잡: "var(--busy)", 불가: "var(--down)", 미확인: "var(--ink-3)" };
+
+function renderSummary() {
+  const { list, tod } = state.view;
+  const counts = Object.fromEntries(STATUS.map(s => [s, 0]));
+  list.forEach(s => counts[s.status]++);
+  const ext = external();
+  const flag = ext && ext.kind === "snapshot" ? '<span class="snap-flag" title="실시간 조회가 실패해 마지막으로 저장된 실제 데이터를 보여줍니다">저장본</span>' : "";
+  document.getElementById("r-name").innerHTML = esc(state.region.name) + flag;
+  const chg = list.reduce((a, s) => a + s.total, 0);
+  const totals = `충전소 ${list.length.toLocaleString()}곳과 충전기 ${chg.toLocaleString()}대`;
+  document.getElementById("r-sub").textContent = !ext ? emptyMsg()
+    : state.view.replay ? `${state.hour}시 기록(${state.view.replay.slice(0, 2)}:${state.view.replay.slice(2)} 수집) 기준, ${totals}`
+    : `${ext.when} ${({ live: "조회", collected: "수집", snapshot: "저장" })[ext.kind] || "기준"} 기준, ${totals}`;
+  const ld = document.getElementById("loading");
+  ld.hidden = !!ext; ld.textContent = ext ? "" : emptyMsg();
+  const total = list.length || 1;
+  document.getElementById("stack").innerHTML = STATUS.filter(s => counts[s])
+    .map(s => `<i style="width:${counts[s] / total * 100}%;background:${COLOR_VAR[s]}" title="${STATUS_LABEL[s]} ${counts[s]}곳"></i>`).join("");
+  document.getElementById("legend").innerHTML = STATUS.map(s =>
+    `<button type="button" data-s="${s}" aria-pressed="${!state.hidden.has(s)}" title="지도에서 ${state.hidden.has(s) ? "보이기" : "숨기기"}">
+       <span class="sw s-${s}"></span>${STATUS_LABEL[s]}<span class="cnt num">${counts[s]}</span></button>`).join("");
+  const avail = list.reduce((a, s) => a + s.avail, 0), ch = list.reduce((a, s) => a + s.charging, 0);
+  document.getElementById("f-idle").innerHTML = (avail + ch) ? `${Math.round(avail / (avail + ch) * 100)}<small>%</small>` : "–";
+  const fp = list.map(s => s.fast.price).filter(v => v != null);
+  document.getElementById("f-price").innerHTML = fp.length ? `${(fp.reduce((a, b) => a + b, 0) / fp.length).toFixed(1)}<small>원</small>` : "–";
+  const need = list.filter(s => s.status === "혼잡" || s.status === "불가");
+  const ok = need.filter(s => s.alt).length;
+  document.getElementById("f-redir").innerHTML = need.length ? `${ok}<small>/ ${need.length}곳</small>` : "0<small>곳</small>";
+  const notes = [];
+  if (state.view.replay) notes.push(`${state.hour}시 실측 기록을 보고 있습니다`);
+  else if (state.view.noRecord) notes.push(`${state.hour}시 기록이 없어 지금 상태를 보여줍니다`);
+  if (tod.label) notes.push(`${tod.label} ×${tod.m.toFixed(2)} 적용 중`);
+  document.getElementById("map-note").textContent = notes.join(". ");
+  document.getElementById("map-note").hidden = !notes.length;
+}
+
+function renderPairs() {
+  const rows = state.view.list.filter(s => s.status === "혼잡" && s.alt)
+    .sort((a, b) => b.charging - a.charging || a.alt.dist - b.alt.dist).slice(0, 6);
+  const el = document.getElementById("pairs");
+  if (!rows.length) { el.innerHTML = `<p class="empty">지금은 반경 ${state.p.rad}km 안에서 안내할 혼잡 거점이 없습니다.</p>`; return; }
+  el.innerHTML = rows.map(s => {
+    const save = s.alt.save;
+    return `<button type="button" class="pair" data-id="${esc(s.id)}">
+      <span class="route"><i class="dotsw" style="background:var(--busy)"></i><span>${esc(s.name)}</span></span>
+      <span class="route to"><svg width="14" height="12" viewBox="0 0 14 12" aria-hidden="true"><path d="M2 0v6h10M8 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>
+        <i class="dotsw" style="background:var(--free)"></i><span>${esc(s.alt.st.name)}</span></span>
+      <span class="meta num">${s.alt.dist.toFixed(1)}km 거리, ${s.alt.speed} ${Math.round(s.alt.kw)}kW ${fmt(s.alt.price)}원${save > 0 ? `, kWh당 ${save.toFixed(0)}원 저렴` : ""}</span>
+    </button>`;
+  }).join("");
+}
+
+// 단가 출처 한 줄: 운영사 요금표의 어느 값을 썼는지, 비회원가는 얼마인지
+function priceNote(s) {
+  const parts = [];
+  for (const [label, x] of [["급속", s.fast], ["완속", s.slow]]) {
+    if (!x.total) continue;
+    const src = x.src === "운영사" ? `${esc(s.busi)} 회원가` : x.src === "운영사(인접 구간)" ? `${esc(s.busi)} 회원가(가장 가까운 출력 구간)` : "운영사 요금 미등재, 공공 단가 적용";
+    parts.push(`${label}: ${src}${x.non != null ? `, 비회원 ${x.non.toFixed(1)}원` : ""}`);
+  }
+  const x = s.fast.total ? s.fast : s.slow;
+  return `<p class="sub" style="margin-top:8px">${parts.join(" · ")}${x.upd ? ` (${esc(x.from)}, ${esc(x.upd)} 갱신)` : ""}</p>`;
+}
+
+function renderDetail() {
+  const el = document.getElementById("detail");
+  const s = state.selected && state.view.list.find(x => x.id === state.selected);
+  if (!s) { el.hidden = true; drawSelection(); return; }
+  const { tod } = state.view;
+  const row = (label, x) => !x.total ? "" : `<tr><td>${label}<small style="display:block;color:var(--ink-2)">${Math.round(x.kw)}kW</small></td><td>${x.avail}/${x.total}</td><td>${x.base.toFixed(1)}</td>
+      <td class="c-${x.status}">${x.mult == null ? "–" : "×" + x.mult.toFixed(2)}${tod.m !== 1 ? " ×" + tod.m.toFixed(2) : ""}</td>
+      <td><b class="c-${x.status}">${fmt(x.price)}</b></td></tr>`;
+  let alt = "";
+  if (s.alt) {
+    const save = s.alt.save;
+    alt = `<div class="alt">${s.alt.dist.toFixed(1)}km 떨어진 <button type="button" data-id="${esc(s.alt.st.id)}">${esc(s.alt.st.name)}</button>에
+      ${s.alt.speed} 충전기(최대 ${Math.round(s.alt.kw)}kW)가 비어 있습니다. ${fmt(s.alt.price)}원/kWh${save > 0 ? `로, kWh당 ${save.toFixed(1)}원 쌉니다.` : save < 0 ? `로, 운영사 요금이 달라 kWh당 ${(-save).toFixed(1)}원 비싸지만 바로 충전할 수 있습니다.` : "입니다."}</div>`;
+  } else if (s.status === "혼잡" || s.status === "불가") {
+    alt = `<div class="alt">반경 ${state.p.rad}km 안에 같은 속도가 여유인 거점이 없습니다.</div>`;
+  }
+  el.innerHTML = `<button type="button" class="close" id="close-detail">닫기</button>
+    <h3 style="margin:0;font-size:17px">${esc(s.name)}</h3>
+    <p class="sub">${esc(s.facility)}, 주차 ${esc(s.parking)}, ${esc(s.busi)}</p>
+    <span class="chip s-${s.status}">${STATUS_LABEL[s.status]}</span>
+    <table class="calc num"><thead><tr><th>구분</th><th>대기</th><th>회원가</th><th>배수</th><th>동적 단가</th></tr></thead>
+      <tbody>${row("급속", s.fast)}${row("완속", s.slow)}</tbody></table>
+    ${priceNote(s)}
+    ${alt}
+    <p class="sub" style="margin-top:10px">${esc(s.addr)}</p>`;
+  el.hidden = false;
+}
+
+function renderPolicy() {
+  const p = state.p;
+  document.getElementById("th-o").textContent = Math.round(p.th * 100) + "% 이상";
+  document.getElementById("disc-o").textContent = Math.round(p.disc * 100) + "%";
+  document.getElementById("sur-o").textContent = Math.round(p.sur * 100) + "%";
+  document.getElementById("rad-o").textContent = p.rad + "km";
+  const tod = timeMult(state.hour, p).m;
+  const tiers = [["완속 7kW", 7], ["급속 50kW", 50], ["급속 100kW", 100], ["초급속 200kW", 200]];  // 공공(기후부) 단가 기준 예시
+  document.getElementById("ptable").innerHTML = `<thead><tr><th>원/kWh</th><th class="c-여유">여유</th><th class="c-보통">보통</th><th class="c-혼잡">혼잡</th></tr></thead><tbody>` +
+    tiers.map(([n, kw]) => `<tr><td>${n}</td>${["여유", "보통", "혼잡"].map(s => `<td class="c-${s}">${(publicRate(kw) * congestionMult(s, p) * tod).toFixed(1)}</td>`).join("")}</tr>`).join("") + "</tbody>";
+}
+
+const COLS = [
+  { key: "name", label: "충전소", get: s => s.name, cls: "name" },
+  { key: "status", label: "상태", get: s => STATUS.indexOf(s.status), show: s => `<span class="c-${s.status}">${STATUS_LABEL[s.status]}</span>` },
+  { key: "ratio", label: "대기율", get: s => s.ratio ?? -1, show: s => s.ratio == null ? "–" : Math.round(s.ratio * 100) + "%", r: 1 },
+  { key: "fast", label: "급속 대기", get: s => s.fast.total ? s.fast.avail / s.fast.total : -1, show: s => s.fast.total ? `${s.fast.avail}/${s.fast.total}` : "–", r: 1 },
+  { key: "fprice", label: "급속 단가", get: s => s.fast.price ?? 1e9, show: s => fmt(s.fast.price), r: 1 },
+  { key: "slow", label: "완속 대기", get: s => s.slow.total ? s.slow.avail / s.slow.total : -1, show: s => s.slow.total ? `${s.slow.avail}/${s.slow.total}` : "–", r: 1 },
+  { key: "sprice", label: "완속 단가", get: s => s.slow.price ?? 1e9, show: s => fmt(s.slow.price), r: 1 },
+  { key: "alt", label: "옮겨 갈 곳", get: s => s.alt ? s.alt.dist : 1e9, show: s => s.alt ? `${esc(s.alt.st.name)} (${s.alt.dist.toFixed(1)}km)` : "" },
+  { key: "busi", label: "운영기관", get: s => s.busi },
+];
+function renderTable() {
+  const q = state.q.trim().toLowerCase();
+  const col = COLS.find(c => c.key === state.sort.key);
+  const rows = state.view.list.filter(s => !q || s.name.toLowerCase().includes(q) || s.busi.toLowerCase().includes(q))
+    .sort((a, b) => { const x = col.get(a), y = col.get(b); return (x < y ? -1 : x > y ? 1 : 0) * state.sort.dir; });
+  const LIMIT = 400;
+  document.getElementById("stbl").innerHTML =
+    `<thead><tr>${COLS.map(c => `<th class="${c.r ? "r" : ""}" data-k="${c.key}" ${c.key === state.sort.key ? `aria-sort="${state.sort.dir > 0 ? "ascending" : "descending"}"` : ""}>${c.label}${c.key === state.sort.key ? (state.sort.dir > 0 ? " ▲" : " ▼") : ""}</th>`).join("")}</tr></thead>
+     <tbody>${rows.slice(0, LIMIT).map(s => `<tr data-id="${esc(s.id)}" class="${s.id === state.selected ? "on" : ""}">${COLS.map(c =>
+       `<td class="${c.r ? "r num" : ""} ${c.cls || ""}">${c.show ? c.show(s) : esc(c.get(s))}</td>`).join("")}</tr>`).join("")}
+     ${rows.length > LIMIT ? `<tr><td colspan="${COLS.length}" class="sub">${rows.length - LIMIT}곳 더 있음. 검색으로 좁혀 보세요.</td></tr>` : ""}
+     ${!rows.length ? `<tr><td colspan="${COLS.length}" class="sub">${q ? "검색 결과가 없습니다." : state.loading ? "충전기 데이터를 받는 중입니다." : "표시할 충전소가 없습니다."}</td></tr>` : ""}</tbody>`;
+}
+
+// 시간 막대 아래 눈금 (0·6·12·18·23시)
+function renderSpark() {
+  const el = d3.select("#spark"), W = Math.max(200, el.node().clientWidth || 600);
+  el.attr("viewBox", `0 0 ${W} 16`);
+  el.selectAll("*").remove();
+  const x = h => 8 + h * (W - 16) / 23;   // 슬라이더 손잡이 중심과 맞춤
+  [0, 6, 12, 18, 23].forEach(h => el.append("text").attr("class", "tick").attr("x", x(h)).attr("y", 12).text(h + "시"));
+}
+
+// ───────────────────────── 갱신 흐름 ─────────────────────────
+function refresh({ refit = false, spark = true } = {}) {
+  state.view = compute();
+  if (external() && state.hour === liveHour()) state.liveCongested = state.view.list.filter(s => s.status === "혼잡").length;
+  if (refit) fit();
+  drawMap(); renderSummary(); renderPairs(); renderDetail(); renderPolicy(); renderTable();
+  if (spark) renderSpark();
+  document.getElementById("hour-big").innerHTML = `${state.hour}<span>시</span>`;
+  document.getElementById("hour").value = state.hour;
+}
+function renderRegions() {
+  document.getElementById("regions").innerHTML = REGIONS.map(r =>
+    `<button type="button" data-code="${r.code}" aria-pressed="${r.code === state.region.code}">${r.name}</button>`).join("");
+  document.getElementById("reload").hidden = state.server !== "api";   // 정적 사이트(GitHub Pages)는 자동 갱신이라 숨김
+}
+function setRegion(r) {
+  state.region = r; state.selected = null;
+  renderRegions(); refresh({ refit: true });
+  if (state.server && !state.live[r.code]) loadLive(r);
+}
+// 아직 보여줄 데이터가 없을 때 지도 가운데와 요약에 띄울 말
+function emptyMsg() {
+  if (state.loading) return `${state.region.name} 충전기 데이터를 받는 중입니다`;
+  if (!state.server) return state.notice;
+  return `${state.region.name} 데이터를 받지 못했습니다. '새로 받기'를 눌러 다시 시도하세요`;
+}
+
+// ───────────────────────── 실시간 데이터 (server.py가 있을 때만) ─────────────────────────
+function setStatus(msg, isErr = false) {
+  const el = document.getElementById("status");
+  el.textContent = msg; el.classList.toggle("err", isErr);
+}
+// 정적 모드: GitHub Actions가 15분마다 만든 data/history/{code}.json 하나로 지금 상태와 기록을 모두 받음
+async function loadStatic(region) {
+  const res = await fetch(`data/history/${region.code}.json`, { cache: "no-store" });
+  if (res.status === 404) throw new Error(`${region.name}은 아직 수집된 기록이 없습니다.`);
+  if (!res.ok) throw new Error(`데이터 파일을 받지 못했습니다 (${res.status}).`);
+  const hist = await res.json();
+  const hours = Object.keys(hist.hours).map(Number);
+  if (!hours.length) throw new Error(`${region.name}은 아직 수집된 기록이 없습니다.`);
+  const h = Math.max(...hours), slot = hist.hours[h];
+  const first = !state.live[region.code];
+  state.history[region.code] = hist;
+  state.live[region.code] = { chargers: chargersFromHistory(hist, slot), hour: h, kind: "collected",
+                              when: `${hist.date} ${slot.t.slice(0, 2)}:${slot.t.slice(2)}` };
+  if (first && region.code === state.region.code) state.hour = h;
+  const mins = Math.round((Date.now() - Date.parse(`${hist.date}T${slot.t.slice(0, 2)}:${slot.t.slice(2)}:00+09:00`)) / 60000);
+  // 수집 지연 경고는 관리자 화면(주소 끝에 #admin)에서만. 방문자에게는 '수집 기준 시각'만 보인다.
+  if (!ADMIN || mins <= 120) return "";
+  return `[관리자] 마지막 수집이 ${mins >= 1440 ? Math.floor(mins / 1440) + "일" : Math.floor(mins / 60) + "시간"} 전입니다. 수집이 멈췄는지 확인이 필요합니다.`;
+}
+async function loadLive(region, force = false) {
+  state.loading = true;
+  if (region.code === state.region.code) { setStatus(""); state.live[region.code] ? renderSummary() : refresh(); }
+  document.getElementById("reload").disabled = true;
+  let msg = "", isErr = false;
+  if (state.server === "static") {
+    try { msg = await loadStatic(region); isErr = !!msg; }
+    catch (err) {
+      isErr = true; msg = err.message;
+    }
+    state.loading = false;
+    document.getElementById("reload").disabled = false;
+    if (region.code === state.region.code) { renderRegions(); refresh(); setStatus(msg, isErr); }
+    return;
+  }
+  try {
+    const res = await fetch(`api/chargers?region=${encodeURIComponent(region.name)}${force ? "&refresh=1" : ""}`, { cache: "no-store" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `서버가 ${res.status} 오류를 돌려줬습니다.`);
+    const first = !state.live[region.code];
+    state.live[region.code] = { rows: data.rows || [], when: data.fetched_at, kind: data.source === "live" ? "live" : "snapshot" };
+    msg = data.warning || "";
+    if (first && data.source === "live") state.hour = kstHour();
+    await loadHistory(region);
+  } catch (err) {
+    isErr = true;
+    msg = `실시간 데이터를 받지 못했습니다. ${err.message || ""}`.trim();
+  }
+  state.loading = false;
+  document.getElementById("reload").disabled = false;
+  if (region.code === state.region.code) { renderRegions(); refresh(); setStatus(msg, isErr); }
+}
+async function loadHistory(region) {
+  try {
+    const res = await fetch(`api/history?region=${encodeURIComponent(region.name)}`, { cache: "no-store" });
+    if (res.ok) state.history[region.code] = await res.json();
+  } catch (e) { /* 기록이 없어도 실시간 화면은 그대로 동작 */ }
+}
+// 서버에 키가 없을 때: 사이트(폰 포함)에서 한 번 입력 → 서버가 확인 후 저장 → 실제 데이터로 전환
+function setupKeyForm() {
+  const form = document.getElementById("key-box"), msg = document.getElementById("key-msg");
+  form.hidden = false;
+  form.addEventListener("submit", async e => {
+    e.preventDefault();
+    const key = document.getElementById("key-input").value.trim();
+    if (!key) { msg.textContent = "인증키를 붙여 넣어 주세요."; msg.classList.add("err"); return; }
+    const btn = document.getElementById("key-save");
+    btn.disabled = true; msg.classList.remove("err"); msg.textContent = "키를 확인하는 중입니다...";
+    try {
+      const res = await fetch("api/key", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `서버 오류 (${res.status})`);
+      form.hidden = true;
+      state.server = "api"; state.live = {}; state.history = {};
+      renderRegions(); refresh(); loadLive(state.region);
+      setStatus("실제 데이터로 바꿨습니다. 10분마다 기록도 쌓입니다.");
+    } catch (err) {
+      msg.textContent = err.message; msg.classList.add("err");
+    } finally { btn.disabled = false; }
+  });
+}
+// 폰·팀원용 주소 보여주기 (run.command가 만든 터널 주소). QR은 브라우저에서 직접 그림
+function setupShare(url) {
+  const btn = document.getElementById("share"), box = document.getElementById("share-box");
+  btn.hidden = false;
+  btn.addEventListener("click", async () => {
+    if (!box.hidden) { box.hidden = true; return; }
+    let qr = "";
+    if (window.qrcode) {
+      const q = qrcode(0, "M"); q.addData(url); q.make();
+      qr = `<img alt="폰 카메라로 찍으면 열리는 QR 코드" src="${q.createDataURL(6, 0)}">`;
+    }
+    box.innerHTML = `<span>폰·팀원은 이 주소로 열면 됩니다.${state.server === "static" ? "" : " 이 맥이 잠들거나 꺼지면 함께 꺼집니다."}</span>
+      <a href="${esc(url)}" target="_blank" rel="noopener">${esc(url)}</a>${qr}
+      <span><button type="button" class="file-btn" id="copy-url">주소 복사</button></span>`;
+    box.hidden = false;
+    document.getElementById("copy-url").addEventListener("click", e => {
+      navigator.clipboard?.writeText(url).then(() => { e.target.textContent = "복사됨"; }).catch(() => {});
+    });
+  });
+}
+async function getJSON(url) {
+  const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 4000);
+  try {
+    const res = await fetch(url, { signal: ctl.signal, cache: "no-store" });
+    if (!res.ok || !(res.headers.get("content-type") || "").includes("json")) return null;
+    return await res.json();
+  } catch (e) { return null; } finally { clearTimeout(t); }
+}
+// 데이터 출처 찾기: GitHub Pages 정적 데이터(data/status.json) → server.py(api/health). 둘 다 없으면 안내만 띄움
+async function detectServer() {
+  let refreshSec = 300;
+  const st = await getJSON("data/status.json");
+  if (st && st.ok) {
+    state.server = "static"; refreshSec = st.refresh_sec || 300;
+    if (!st.regions[state.region.code]) {   // 첫 화면 지역에 기록이 없으면 기록이 있는 지역으로
+      const r = REGIONS.find(x => st.regions[x.code]); if (r) state.region = r;
+    }
+  } else {
+    const h = await getJSON("api/health");
+    const stop = notice => { state.loading = false; state.notice = notice; refresh(); };
+    if (!h || !h.ok) return stop("서버에 연결되지 않았습니다. 맥에서 실행 파일(run.command)을 켠 뒤 그 주소로 열어 주세요");
+    if (h.public_url) setupShare(h.public_url);
+    if (!h.live) { setupKeyForm(); return stop("공공데이터포털 인증키를 '실제 데이터 켜기' 칸에 넣으면 실제 충전소 현황이 표시됩니다"); }
+    state.server = "api"; refreshSec = h.cache_ttl_sec || 300;
+  }
+  renderRegions(); refresh({ refit: true });
+  loadLive(state.region);
+  setInterval(() => { if (!document.hidden && !state.loading) loadLive(state.region); },
+              Math.max(60, refreshSec) * 1000);
+}
+function select(id) {
+  state.selected = id;
+  renderDetail(); renderTable(); drawSelection();
+  const s = state.view.list.find(x => x.id === id);
+  if (s) focusOn(s);
+}
+
+// ───────────────────────── 이벤트 ─────────────────────────
+document.getElementById("regions").addEventListener("click", e => {
+  const b = e.target.closest("button[data-code]"); if (b) setRegion(regionByCode.get(b.dataset.code));
+});
+document.getElementById("legend").addEventListener("click", e => {
+  const b = e.target.closest("button[data-s]"); if (!b) return;
+  const s = b.dataset.s; state.hidden.has(s) ? state.hidden.delete(s) : state.hidden.add(s);
+  drawMap(); renderSummary();
+});
+for (const b of ["pairs", "detail", "stbl"]) document.getElementById(b).addEventListener("click", e => {
+  if (e.target.id === "close-detail") { state.selected = null; renderDetail(); renderTable(); return; }
+  const th = e.target.closest("th[data-k]");
+  if (th) { const k = th.dataset.k; state.sort = { key: k, dir: state.sort.key === k ? -state.sort.dir : 1 }; renderTable(); return; }
+  const t = e.target.closest("[data-id]"); if (t) select(t.dataset.id);
+});
+const hourInput = document.getElementById("hour");
+hourInput.addEventListener("input", () => { state.hour = +hourInput.value; refresh(); });
+let timer = null;
+document.getElementById("play").addEventListener("click", e => {
+  const b = e.currentTarget;
+  if (timer) { clearInterval(timer); timer = null; b.setAttribute("aria-pressed", "false"); b.setAttribute("aria-label", "하루 재생"); b.title = "하루 재생"; b.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5v11l9.5-5.5z"/></svg>'; return; }
+  b.setAttribute("aria-pressed", "true"); b.setAttribute("aria-label", "멈춤"); b.title = "멈춤"; b.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 2.5h3v11h-3zM9.5 2.5h3v11h-3z"/></svg>';
+  timer = setInterval(() => { state.hour = (state.hour + 1) % 24; refresh(); }, 850);
+});
+for (const id of ["th", "disc", "sur", "rad"]) document.getElementById(id).addEventListener("input", e => { state.p[id] = +e.target.value; refresh(); });
+for (const id of ["tod", "lim"]) document.getElementById(id).addEventListener("change", e => { state.p[id] = e.target.checked; refresh(); });
+document.getElementById("q").addEventListener("input", e => { state.q = e.target.value; renderTable(); });
+document.getElementById("reload").addEventListener("click", () => loadLive(state.region, true));
+// ───────────────────────── 내 위치 ─────────────────────────
+// 브라우저 위치 권한으로 현재 위치를 찍고, 그 시·군으로 옮겨 가장 가까운 '여유' 충전소를 안내한다. 위치는 서버로 보내지 않는다.
+const meLayer = L.layerGroup().addTo(map);
+const meNote = document.getElementById("me-note");
+let meTimer = null;
+// 안내 창: 오른쪽 × 로 닫기. 오류·안내 문구는 6초 뒤 저절로 닫힘
+const showMe = (html, autoHide = false) => {
+  clearTimeout(meTimer);
+  meNote.innerHTML = html ? `<span>${html}</span><button type="button" class="me-close" aria-label="닫기">×</button>` : "";
+  meNote.hidden = !html;
+  if (html && autoHide) meTimer = setTimeout(() => showMe(""), 6000);
+};
+let mePos = null;
+function nearestFree(pos) {
+  let best = null, bd = Infinity;
+  for (const s of state.view?.list || []) {
+    if (s.status !== "여유") continue;
+    const d = haversine(pos, s); if (d < bd) { bd = d; best = s; }
+  }
+  return best ? { s: best, d: bd } : null;
+}
+function afterLoaded(fn, tries = 40) {   // 지역 데이터를 받을 때까지 기다렸다가 실행 (최대 약 10초)
+  if (!state.loading && state.view?.list?.length) return fn();
+  if (tries > 0) setTimeout(() => afterLoaded(fn, tries - 1), 250); else fn();
+}
+function placeMe(pos, acc) {
+  meLayer.clearLayers();
+  if (acc && acc < 2000) meLayer.addLayer(L.circle([pos.lat, pos.lng], { radius: acc, color: "#2a7de1", weight: 1, fillOpacity: 0.08, interactive: false }));
+  meLayer.addLayer(L.marker([pos.lat, pos.lng], { keyboard: false, icon: L.divIcon({ className: "", html: '<div class="me-dot"></div>', iconSize: [0, 0] }) })
+    .bindTooltip("내 위치", { direction: "top", offset: [0, -10], className: "dtip" }));
+}
+function guideFromMe() {
+  const n = nearestFree(mePos);
+  if (!n) { map.setView([mePos.lat, mePos.lng], 14, { animate: !reduced }); showMe(`${esc(state.region.name)}에 지금 '여유' 충전소가 없습니다.`, true); return; }
+  map.fitBounds(L.latLngBounds([[mePos.lat, mePos.lng], [n.s.lat, n.s.lng]]), { padding: [60, 60], maxZoom: 16, animate: !reduced });
+  const price = n.s.price != null ? `, ${n.s.price.toFixed(1)}원/kWh` : "";
+  showMe(`가장 가까운 여유 충전소: <button type="button" data-id="${esc(n.s.id)}">${esc(n.s.name)}</button> (${n.d < 1 ? Math.round(n.d * 1000) + "m" : n.d.toFixed(1) + "km"}${price})`);
+}
+document.getElementById("zme").addEventListener("click", () => {
+  if (!navigator.geolocation) { showMe("이 브라우저는 위치 기능을 지원하지 않습니다.", true); return; }
+  showMe("현재 위치를 찾는 중입니다…");
+  navigator.geolocation.getCurrentPosition(p => {
+    mePos = { lat: p.coords.latitude, lng: p.coords.longitude };
+    placeMe(mePos, p.coords.accuracy);
+    const f = GEO.features.find(f => d3.geoContains(f, [mePos.lng, mePos.lat]));
+    if (!f) { map.setView([mePos.lat, mePos.lng], 11, { animate: !reduced }); showMe("현재 위치가 충청북도 밖이라 가까운 충전소를 안내할 수 없습니다.", true); return; }
+    if (f.properties.zscode !== state.region.code) setRegion(regionByCode.get(f.properties.zscode));
+    afterLoaded(guideFromMe);
+  }, err => {
+    showMe(err.code === 1 ? "위치 권한이 꺼져 있습니다. 브라우저(또는 휴대폰 설정)에서 이 사이트의 위치 접근을 허용해 주세요."
+                          : "현재 위치를 찾지 못했습니다. 잠시 후 다시 눌러 주세요.", true);
+  }, { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 });
+});
+meNote.addEventListener("click", e => {
+  if (e.target.closest(".me-close")) { showMe(""); return; }
+  const t = e.target.closest("[data-id]"); if (t) select(t.dataset.id);
+});
+
+document.getElementById("zin").addEventListener("click", () => map.zoomIn());
+document.getElementById("zout").addEventListener("click", () => map.zoomOut());
+document.getElementById("zfit").addEventListener("click", () => fitRegion(true));
+
+let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => { map.invalidateSize(); renderSpark(); }, 150); });
+
+renderRegions();
+refresh({ refit: true });
+detectServer();
+})();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,1615 @@
+<title>충북 EV 요금 관제</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;800&display=swap">
+<style>
+/* Layout: 왼쪽은 도로 지도(OpenStreetMap) 위에 충전소를 올린 관제 지도 + 24시간 스크러버, 오른쪽은 지역 요약·요금 정책·거점 상세 패널, 아래는 거점 표.
+   흰 바탕 단일 테마(사용자 요청). 한글은 화면에서 가장 또렷한 Noto Sans KR 한 가족을 굵기로만 위계를 줌. */
+:root {
+  color-scheme: light;
+  --ground: #ffffff;       /* 페이지 바탕: 흰색 */
+  --surface: #ffffff;
+  --land: #f1f3f2;         /* 마우스 올림·선택 배경 */
+  --land-edge: #d9dedb;
+  --map-bg: #f2f3f1;       /* 지도 타일이 오기 전 바탕 */
+  --ink: #17201c;
+  --ink-2: #4a5550;
+  --ink-3: #7d8782;
+  --rule: #e2e6e4;
+  --free: #1f6a8f;         /* 여유: 석유청색 (남는 용량 = 차가운 쪽) */
+  --mid: #c8b27a;          /* 보통: 모래색 (발산 팔레트의 중간) */
+  --busy: #d24d27;         /* 혼잡: 주홍 (압력 = 뜨거운 쪽) */
+  --down: #33403a;         /* 불가: 짙은 슬레이트 링 */
+  --free-soft: #e3eef4;
+  --busy-soft: #fae6de;
+  --font-display: "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  --font-body: "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--ground); color: var(--ink); font: 400 15px/1.55 var(--font-body);
+       padding: 0 16px 24px; -webkit-font-smoothing: antialiased; }
+button, input, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--free); outline-offset: 2px; }
+.num { font-variant-numeric: tabular-nums; }
+
+/* ── 상단 ─────────────────────────────── */
+.top { display: flex; align-items: center; gap: 12px 24px; flex-wrap: wrap; padding: 14px 0 12px; }
+.brand { font-family: var(--font-display); font-size: 26px; line-height: 1; letter-spacing: -.01em; margin: 0; white-space: nowrap; }
+.brand small { font-family: var(--font-body); font-size: 13px; font-weight: 500; color: var(--ink-3); margin-left: 10px; letter-spacing: 0; }
+.regions { display: flex; gap: 2px; overflow-x: auto; flex: 1 1 420px; min-width: 0; scrollbar-width: thin; }
+.regions button { border: 0; background: transparent; padding: 7px 11px; border-radius: 3px; cursor: pointer;
+                  font-size: 14px; color: var(--ink-2); white-space: nowrap; }
+.regions button:hover { background: var(--land); color: var(--ink); }
+.regions button[aria-pressed="true"] { background: var(--ink); color: var(--surface); font-weight: 600; }
+.source { display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; font-size: 13px; color: var(--ink-2); }
+.file-btn { white-space: nowrap; border: 1px dashed var(--ink-3); padding: 6px 10px; border-radius: 3px; cursor: pointer; font-size: 13px; background: transparent; }
+.file-btn:hover { border-style: solid; }
+.file-btn.share { border-style: solid; border-color: var(--ink); color: var(--ink); font-weight: 600; }
+.share-box { margin-top: 10px; padding: 12px 14px; background: var(--land); border-radius: 4px; font-size: 14px; display: grid; gap: 6px; }
+.share-box a { color: var(--free); font-weight: 600; word-break: break-all; }
+.key-box { margin-top: 10px; padding: 12px 14px; background: var(--land); border-radius: 4px; font-size: 14px; display: grid; gap: 8px; }
+.key-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.key-row input { flex: 1 1 200px; min-width: 0; border: 1px solid var(--land-edge); border-radius: 3px; padding: 7px 10px; background: #fff; font-size: 16px; }
+.key-msg { font-size: 13px; color: var(--ink-2); }
+.key-msg.err { color: var(--busy); }
+.share-box img { width: 168px; height: 168px; image-rendering: pixelated; background: #fff; padding: 6px; border-radius: 3px; }
+
+/* ── 본문 그리드 ─────────────────────────── */
+.app { display: grid; grid-template-columns: minmax(0, 1fr) 390px; gap: 16px; height: calc(100% - 64px); min-height: 640px; }
+.map-pane { position: relative; display: flex; flex-direction: column; min-width: 0; background: var(--map-bg);
+            border: 1px solid var(--rule); border-radius: 4px; overflow: hidden; }
+#map { flex: 1 1 auto; width: 100%; min-height: 360px; background: var(--map-bg); font-family: var(--font-body); }
+.leaflet-tile-pane { filter: saturate(.45) contrast(.95) brightness(1.02); }   /* 도로·지명은 보이되 점 색이 묻히지 않게 */
+.leaflet-container a { color: var(--ink-2); }
+.leaflet-tooltip.dtip { background: var(--ink); color: #fff; border: 0; border-radius: 3px; font-size: 13px; padding: 6px 9px; box-shadow: none; }
+.leaflet-tooltip.dtip::before { border-top-color: var(--ink); }
+.leaflet-tooltip.rtip { background: #fff; color: var(--ink-2); border: 1px solid var(--rule); border-radius: 3px; font-size: 12.5px; box-shadow: none; }
+.rlabel { font: 700 12px var(--font-body); color: var(--ink-3); white-space: nowrap; text-shadow: 0 0 3px #fff, 0 0 3px #fff; }
+.rlabel span { position: absolute; transform: translate(-50%, -50%); }
+.arrow-head { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.arrow-head { overflow: visible; }
+.arrow-head path { fill: var(--ink); stroke: #fff; stroke-width: 2; stroke-linejoin: round; paint-order: stroke; }
+.map-tools { position: absolute; top: 10px; right: 10px; display: flex; flex-direction: column; gap: 4px; z-index: 1000; }
+.map-tools button { width: 32px; height: 32px; border: 1px solid var(--rule); background: var(--surface); border-radius: 3px; cursor: pointer; font-size: 17px; line-height: 1; }
+.map-tools button.fit { width: auto; padding: 0 6px; font-size: 13px; }
+.me-note { position: absolute; z-index: 1000; left: 12px; top: 46px; font-size: 13px; color: var(--ink); background: var(--surface);
+           border: 1px solid var(--rule); padding: 6px 10px; border-radius: 4px; max-width: calc(100% - 110px); box-shadow: 0 1px 4px rgb(0 0 0 / 12%); }
+.me-note { display: flex; gap: 8px; align-items: flex-start; }
+.me-note[hidden] { display: none; }
+.me-note button { border: 0; background: none; padding: 0; color: var(--free); font: inherit; font-weight: 600; cursor: pointer; text-decoration: underline; }
+.me-note .me-close { flex: none; color: var(--ink-2); text-decoration: none; font-size: 18px; line-height: 1; padding: 0 2px; margin: -1px -4px 0 0; }
+.me-dot { width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%; background: #2a7de1; border: 3px solid #fff; box-shadow: 0 0 0 2px rgb(42 125 225 / 35%), 0 1px 4px rgb(0 0 0 / 35%); }
+.map-note { position: absolute; z-index: 1000; left: 12px; top: 10px; font-size: 12.5px; color: var(--ink-2); background: color-mix(in srgb, var(--surface) 88%, transparent);
+            padding: 4px 8px; border-radius: 3px; max-width: calc(100% - 70px); }
+
+/* 24시간 스크러버 */
+.timebar { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 18px; align-items: center; padding: 12px 16px 10px;
+           background: var(--surface); border-top: 1px solid var(--rule); }
+.clock { display: flex; flex-direction: row; gap: 12px; align-items: center; }
+.clock .hour { font-family: var(--font-display); font-size: 34px; line-height: 1; min-width: 2.6em; }
+.clock .hour span { font-size: 20px; margin-left: 2px; }
+.play { width: 40px; height: 40px; border: 1px solid var(--ink); background: transparent; border-radius: 50%; padding: 0; cursor: pointer; display: grid; place-items: center; color: var(--ink); }
+.play svg { width: 16px; height: 16px; fill: currentColor; }
+.play[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
+.scrub { position: relative; min-width: 0; }
+.scrub-head { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; color: var(--ink-2); margin-bottom: 2px; }
+.scrub-head b { color: var(--busy); font-weight: 600; }
+#spark { width: 100%; height: 16px; display: block; overflow: visible; }
+#spark .area { fill: var(--busy-soft); }
+#spark .line { fill: none; stroke: var(--busy); stroke-width: 1.6; }
+#spark .band { fill: var(--free-soft); }
+#spark .cursor { stroke: var(--ink); stroke-width: 1.4; }
+#spark .cursor-dot { fill: var(--busy); stroke: var(--surface); stroke-width: 1.5; }
+#spark .tick { font: 11px var(--font-body); fill: var(--ink-3); text-anchor: middle; }
+#spark .avg { fill: none; stroke: var(--ink-3); stroke-width: 1.4; stroke-dasharray: 3 3; }
+#spark .pt { fill: var(--busy); }
+.scrub-head .key { color: var(--ink-3); margin-left: 8px; white-space: nowrap; }
+#hour { width: 100%; margin: 2px 0 0; accent-color: var(--ink); }
+
+/* ── 오른쪽 패널 ─────────────────────────── */
+.panel { background: var(--surface); border: 1px solid var(--rule); border-radius: 4px; overflow-y: auto; min-width: 0; }
+.panel section { padding: 18px 20px; border-bottom: 1px solid var(--rule); }
+.panel section:last-child { border-bottom: 0; }
+.panel h2 { font-family: var(--font-display); font-weight: 400; font-size: 30px; line-height: 1.1; margin: 0; }
+.panel h3 { font-size: 15px; font-weight: 700; margin: 0 0 10px; }
+.sub { font-size: 13px; color: var(--ink-3); margin: 4px 0 0; }
+.status { font-size: 13px; color: var(--ink-2); margin: 6px 0 0; }
+.status:empty { display: none; }
+.status.err { color: var(--busy); }
+.loading { position: absolute; z-index: 1000; inset: 0 0 auto 0; top: 45%; text-align: center; font-size: 14px; color: var(--ink-2); pointer-events: none; }
+.snap-flag { display: inline-block; font-size: 12px; color: var(--ink-2); border: 1px solid currentColor; border-radius: 2px; padding: 0 5px; margin-left: 6px; vertical-align: 2px; }
+
+.stack { display: flex; height: 14px; border-radius: 2px; overflow: hidden; margin: 14px 0 10px; background: var(--land); }
+.stack i { display: block; height: 100%; transition: width .35s ease; }
+.legend { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px 12px; }
+.legend button { display: flex; align-items: center; gap: 8px; border: 0; background: transparent; padding: 3px 0; cursor: pointer; text-align: left; font-size: 14px; }
+.legend button[aria-pressed="false"] { opacity: .38; }
+.legend .sw { width: 11px; height: 11px; border-radius: 50%; flex: none; }
+.legend .cnt { margin-left: auto; font-weight: 600; }
+.sw.s-여유 { background: var(--free); } .sw.s-보통 { background: var(--mid); } .sw.s-혼잡 { background: var(--busy); }
+.sw.s-불가 { background: transparent; box-shadow: inset 0 0 0 2px var(--down); } .sw.s-미확인 { background: transparent; box-shadow: inset 0 0 0 1px var(--ink-3); }
+
+.figs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }
+.fig .v { font-family: var(--font-display); font-size: 26px; line-height: 1.05; }
+.fig .v small { font-family: var(--font-body); font-size: 13px; margin-left: 2px; color: var(--ink-2); }
+.fig .k { font-size: 12.5px; color: var(--ink-3); margin-top: 3px; }
+
+.ctrl { display: grid; gap: 12px; }
+.ctrl label { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; font-size: 14px; align-items: center; }
+.ctrl label output { font-weight: 600; font-variant-numeric: tabular-nums; }
+.ctrl input[type=range] { grid-column: 1 / -1; width: 100%; margin: 0; accent-color: var(--ink); }
+.ctrl .check { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; }
+.ctrl .check input { margin-top: 4px; accent-color: var(--ink); }
+.ctrl .check small { display: block; color: var(--ink-3); font-size: 12.5px; }
+
+table { border-collapse: collapse; width: 100%; }
+.ptable { font-size: 13.5px; margin-top: 14px; }
+.ptable th, .ptable td { padding: 5px 6px; text-align: right; border-bottom: 1px solid var(--rule); }
+.ptable th:first-child, .ptable td:first-child { text-align: left; color: var(--ink-2); }
+.ptable thead th { font-weight: 600; font-size: 12.5px; }
+.c-여유 { color: var(--free); } .c-보통 { color: var(--ink-2); } .c-혼잡 { color: var(--busy); } .c-불가 { color: var(--down); }
+
+.pairs { display: grid; gap: 2px; }
+.pair { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px; text-align: left; border: 0; background: transparent; padding: 8px 10px;
+        margin: 0 -10px; border-radius: 3px; cursor: pointer; font-size: 14px; }
+.pair:hover { background: var(--land); }
+.pair .route { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.pair .route span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pair .route svg { flex: none; }
+.pair .route.to { color: var(--ink-3); }
+.pair .route.to span { color: var(--ink); }
+.pair .meta { font-size: 12.5px; color: var(--ink-3); padding-left: 35px; }
+.dotsw { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.empty { font-size: 13.5px; color: var(--ink-3); margin: 0; }
+
+.detail .chip { display: inline-block; font-size: 12.5px; font-weight: 600; padding: 1px 7px; border-radius: 2px; color: var(--surface); margin-top: 8px; }
+.chip.s-여유 { background: var(--free); } .chip.s-보통 { background: var(--mid); color: var(--ink); } .chip.s-혼잡 { background: var(--busy); }
+.chip.s-불가, .chip.s-미확인 { background: var(--down); }
+.calc { font-size: 13.5px; margin-top: 12px; }
+.calc th, .calc td { padding: 6px 4px; border-bottom: 1px solid var(--rule); text-align: right; }
+.calc th:first-child, .calc td:first-child { text-align: left; }
+.calc thead th { font-weight: 600; font-size: 12.5px; color: var(--ink-2); }
+.alt { margin-top: 12px; padding: 10px 12px; background: var(--free-soft); border-radius: 3px; font-size: 14px; }
+.alt button, .link-btn { border: 0; background: none; padding: 0; color: var(--free); font-weight: 600; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+.detail .close { float: right; border: 0; background: none; font-size: 13px; color: var(--ink-3); cursor: pointer; }
+
+/* ── 아래: 표, 방식 ───────────────────────── */
+.below { display: grid; grid-template-columns: minmax(0, 1fr) 390px; gap: 16px; margin-top: 16px; align-items: start; }
+.card { background: var(--surface); border: 1px solid var(--rule); border-radius: 4px; padding: 18px 20px; min-width: 0; }
+.card h3 { font-family: var(--font-display); font-weight: 400; font-size: 22px; margin: 0; }
+.tbl-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+#q { border: 1px solid var(--land-edge); background: #fff; border-radius: 3px; padding: 6px 10px; width: min(260px, 100%); }
+.tbl-wrap { overflow-x: auto; max-height: 520px; overflow-y: auto; }
+.stbl { font-size: 13.5px; min-width: 760px; }
+.stbl th { position: sticky; top: 0; background: var(--surface); text-align: left; font-weight: 600; font-size: 12.5px; color: var(--ink-2);
+           padding: 8px 8px; border-bottom: 1px solid var(--ink-3); cursor: pointer; white-space: nowrap; user-select: none; }
+.stbl th[aria-sort] { color: var(--ink); }
+.stbl td { padding: 7px 8px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+.stbl td.r, .stbl th.r { text-align: right; }
+.stbl tbody tr { cursor: pointer; }
+.stbl tbody tr:hover { background: var(--land); }
+.stbl tbody tr.on { background: var(--free-soft); }
+.stbl .name { max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
+.method p { margin: 10px 0 0; font-size: 14.5px; color: var(--ink-2); }
+.formula { font-size: 15px; margin: 14px 0 6px; padding: 12px 0; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
+.formula b { font-weight: 700; color: var(--ink); }
+.method ol { padding-left: 18px; margin: 10px 0 0; font-size: 14px; color: var(--ink-2); display: grid; gap: 6px; }
+footer { font-size: 12.5px; color: var(--ink-3); margin-top: 18px; display: grid; gap: 4px; max-width: 900px; }
+
+.brand, .clock .hour, .panel h2, .fig .v, .card h3 { font-weight: 800; letter-spacing: -.02em; }
+.panel h3 { font-weight: 700; }
+@media (max-width: 1080px) {
+  .app { grid-template-columns: minmax(0, 1fr); height: auto; }
+  .map-pane { height: 72vh; min-height: 480px; }
+  .below { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 520px) {
+  .top { gap: 10px; }
+  .brand { font-size: 22px; }
+  .brand small { display: none; }
+  .clock .hour { font-size: 32px; }
+  .figs .v { font-size: 22px; }
+}
+@media (prefers-reduced-motion: reduce) { .stack i { transition: none; } }
+
+/* Leaflet 1.9.4 기본 스타일 */
+.leaflet-pane,
+.leaflet-tile,
+.leaflet-marker-icon,
+.leaflet-marker-shadow,
+.leaflet-tile-container,
+.leaflet-pane > svg,
+.leaflet-pane > canvas,
+.leaflet-zoom-box,
+.leaflet-image-layer,
+.leaflet-layer {
+	position: absolute;
+	left: 0;
+	top: 0;
+	}
+.leaflet-container {
+	overflow: hidden;
+	}
+.leaflet-tile,
+.leaflet-marker-icon,
+.leaflet-marker-shadow {
+	-webkit-user-select: none;
+	   -moz-user-select: none;
+	        user-select: none;
+	  -webkit-user-drag: none;
+	}
+.leaflet-tile::selection {
+	background: transparent;
+}
+.leaflet-safari .leaflet-tile {
+	image-rendering: -webkit-optimize-contrast;
+	}
+.leaflet-safari .leaflet-tile-container {
+	width: 1600px;
+	height: 1600px;
+	-webkit-transform-origin: 0 0;
+	}
+.leaflet-marker-icon,
+.leaflet-marker-shadow {
+	display: block;
+	}
+.leaflet-container .leaflet-overlay-pane svg {
+	max-width: none !important;
+	max-height: none !important;
+	}
+.leaflet-container .leaflet-marker-pane img,
+.leaflet-container .leaflet-shadow-pane img,
+.leaflet-container .leaflet-tile-pane img,
+.leaflet-container img.leaflet-image-layer,
+.leaflet-container .leaflet-tile {
+	max-width: none !important;
+	max-height: none !important;
+	width: auto;
+	padding: 0;
+	}
+.leaflet-container img.leaflet-tile {
+	mix-blend-mode: plus-lighter;
+}
+.leaflet-container.leaflet-touch-zoom {
+	-ms-touch-action: pan-x pan-y;
+	touch-action: pan-x pan-y;
+	}
+.leaflet-container.leaflet-touch-drag {
+	-ms-touch-action: pinch-zoom;
+	touch-action: none;
+	touch-action: pinch-zoom;
+}
+.leaflet-container.leaflet-touch-drag.leaflet-touch-zoom {
+	-ms-touch-action: none;
+	touch-action: none;
+}
+.leaflet-container {
+	-webkit-tap-highlight-color: transparent;
+}
+.leaflet-container a {
+	-webkit-tap-highlight-color: rgba(51, 181, 229, 0.4);
+}
+.leaflet-tile {
+	filter: inherit;
+	visibility: hidden;
+	}
+.leaflet-tile-loaded {
+	visibility: inherit;
+	}
+.leaflet-zoom-box {
+	width: 0;
+	height: 0;
+	-moz-box-sizing: border-box;
+	     box-sizing: border-box;
+	z-index: 800;
+	}
+.leaflet-overlay-pane svg {
+	-moz-user-select: none;
+	}
+.leaflet-pane         { z-index: 400; }
+.leaflet-tile-pane    { z-index: 200; }
+.leaflet-overlay-pane { z-index: 400; }
+.leaflet-shadow-pane  { z-index: 500; }
+.leaflet-marker-pane  { z-index: 600; }
+.leaflet-tooltip-pane   { z-index: 650; }
+.leaflet-popup-pane   { z-index: 700; }
+.leaflet-map-pane canvas { z-index: 100; }
+.leaflet-map-pane svg    { z-index: 200; }
+.leaflet-vml-shape {
+	width: 1px;
+	height: 1px;
+	}
+.lvml {
+	behavior: url(#default#VML);
+	display: inline-block;
+	position: absolute;
+	}
+.leaflet-control {
+	position: relative;
+	z-index: 800;
+	pointer-events: visiblePainted; 
+	pointer-events: auto;
+	}
+.leaflet-top,
+.leaflet-bottom {
+	position: absolute;
+	z-index: 1000;
+	pointer-events: none;
+	}
+.leaflet-top {
+	top: 0;
+	}
+.leaflet-right {
+	right: 0;
+	}
+.leaflet-bottom {
+	bottom: 0;
+	}
+.leaflet-left {
+	left: 0;
+	}
+.leaflet-control {
+	float: left;
+	clear: both;
+	}
+.leaflet-right .leaflet-control {
+	float: right;
+	}
+.leaflet-top .leaflet-control {
+	margin-top: 10px;
+	}
+.leaflet-bottom .leaflet-control {
+	margin-bottom: 10px;
+	}
+.leaflet-left .leaflet-control {
+	margin-left: 10px;
+	}
+.leaflet-right .leaflet-control {
+	margin-right: 10px;
+	}
+.leaflet-fade-anim .leaflet-popup {
+	opacity: 0;
+	-webkit-transition: opacity 0.2s linear;
+	   -moz-transition: opacity 0.2s linear;
+	        transition: opacity 0.2s linear;
+	}
+.leaflet-fade-anim .leaflet-map-pane .leaflet-popup {
+	opacity: 1;
+	}
+.leaflet-zoom-animated {
+	-webkit-transform-origin: 0 0;
+	    -ms-transform-origin: 0 0;
+	        transform-origin: 0 0;
+	}
+svg.leaflet-zoom-animated {
+	will-change: transform;
+}
+.leaflet-zoom-anim .leaflet-zoom-animated {
+	-webkit-transition: -webkit-transform 0.25s cubic-bezier(0,0,0.25,1);
+	   -moz-transition:    -moz-transform 0.25s cubic-bezier(0,0,0.25,1);
+	        transition:         transform 0.25s cubic-bezier(0,0,0.25,1);
+	}
+.leaflet-zoom-anim .leaflet-tile,
+.leaflet-pan-anim .leaflet-tile {
+	-webkit-transition: none;
+	   -moz-transition: none;
+	        transition: none;
+	}
+.leaflet-zoom-anim .leaflet-zoom-hide {
+	visibility: hidden;
+	}
+.leaflet-interactive {
+	cursor: pointer;
+	}
+.leaflet-grab {
+	cursor: -webkit-grab;
+	cursor:    -moz-grab;
+	cursor:         grab;
+	}
+.leaflet-crosshair,
+.leaflet-crosshair .leaflet-interactive {
+	cursor: crosshair;
+	}
+.leaflet-popup-pane,
+.leaflet-control {
+	cursor: auto;
+	}
+.leaflet-dragging .leaflet-grab,
+.leaflet-dragging .leaflet-grab .leaflet-interactive,
+.leaflet-dragging .leaflet-marker-draggable {
+	cursor: move;
+	cursor: -webkit-grabbing;
+	cursor:    -moz-grabbing;
+	cursor:         grabbing;
+	}
+.leaflet-marker-icon,
+.leaflet-marker-shadow,
+.leaflet-image-layer,
+.leaflet-pane > svg path,
+.leaflet-tile-container {
+	pointer-events: none;
+	}
+.leaflet-marker-icon.leaflet-interactive,
+.leaflet-image-layer.leaflet-interactive,
+.leaflet-pane > svg path.leaflet-interactive,
+svg.leaflet-image-layer.leaflet-interactive path {
+	pointer-events: visiblePainted; 
+	pointer-events: auto;
+	}
+.leaflet-container {
+	background: #ddd;
+	outline-offset: 1px;
+	}
+.leaflet-container a {
+	color: #0078A8;
+	}
+.leaflet-zoom-box {
+	border: 2px dotted #38f;
+	background: rgba(255,255,255,0.5);
+	}
+.leaflet-container {
+	font-family: "Helvetica Neue", Arial, Helvetica, sans-serif;
+	font-size: 12px;
+	font-size: 0.75rem;
+	line-height: 1.5;
+	}
+.leaflet-bar {
+	box-shadow: 0 1px 5px rgba(0,0,0,0.65);
+	border-radius: 4px;
+	}
+.leaflet-bar a {
+	background-color: #fff;
+	border-bottom: 1px solid #ccc;
+	width: 26px;
+	height: 26px;
+	line-height: 26px;
+	display: block;
+	text-align: center;
+	text-decoration: none;
+	color: black;
+	}
+.leaflet-bar a,
+.leaflet-control-layers-toggle {
+	background-position: 50% 50%;
+	background-repeat: no-repeat;
+	display: block;
+	}
+.leaflet-bar a:hover,
+.leaflet-bar a:focus {
+	background-color: #f4f4f4;
+	}
+.leaflet-bar a:first-child {
+	border-top-left-radius: 4px;
+	border-top-right-radius: 4px;
+	}
+.leaflet-bar a:last-child {
+	border-bottom-left-radius: 4px;
+	border-bottom-right-radius: 4px;
+	border-bottom: none;
+	}
+.leaflet-bar a.leaflet-disabled {
+	cursor: default;
+	background-color: #f4f4f4;
+	color: #bbb;
+	}
+.leaflet-touch .leaflet-bar a {
+	width: 30px;
+	height: 30px;
+	line-height: 30px;
+	}
+.leaflet-touch .leaflet-bar a:first-child {
+	border-top-left-radius: 2px;
+	border-top-right-radius: 2px;
+	}
+.leaflet-touch .leaflet-bar a:last-child {
+	border-bottom-left-radius: 2px;
+	border-bottom-right-radius: 2px;
+	}
+.leaflet-control-zoom-in,
+.leaflet-control-zoom-out {
+	font: bold 18px 'Lucida Console', Monaco, monospace;
+	text-indent: 1px;
+	}
+.leaflet-touch .leaflet-control-zoom-in, .leaflet-touch .leaflet-control-zoom-out  {
+	font-size: 22px;
+	}
+.leaflet-control-layers {
+	box-shadow: 0 1px 5px rgba(0,0,0,0.4);
+	background: #fff;
+	border-radius: 5px;
+	}
+.leaflet-control-layers-toggle {
+	background-image: url(images/layers.png);
+	width: 36px;
+	height: 36px;
+	}
+.leaflet-retina .leaflet-control-layers-toggle {
+	background-image: url(images/layers-2x.png);
+	background-size: 26px 26px;
+	}
+.leaflet-touch .leaflet-control-layers-toggle {
+	width: 44px;
+	height: 44px;
+	}
+.leaflet-control-layers .leaflet-control-layers-list,
+.leaflet-control-layers-expanded .leaflet-control-layers-toggle {
+	display: none;
+	}
+.leaflet-control-layers-expanded .leaflet-control-layers-list {
+	display: block;
+	position: relative;
+	}
+.leaflet-control-layers-expanded {
+	padding: 6px 10px 6px 6px;
+	color: #333;
+	background: #fff;
+	}
+.leaflet-control-layers-scrollbar {
+	overflow-y: scroll;
+	overflow-x: hidden;
+	padding-right: 5px;
+	}
+.leaflet-control-layers-selector {
+	margin-top: 2px;
+	position: relative;
+	top: 1px;
+	}
+.leaflet-control-layers label {
+	display: block;
+	font-size: 13px;
+	font-size: 1.08333em;
+	}
+.leaflet-control-layers-separator {
+	height: 0;
+	border-top: 1px solid #ddd;
+	margin: 5px -10px 5px -6px;
+	}
+.leaflet-default-icon-path { 
+	background-image: url(images/marker-icon.png);
+	}
+.leaflet-container .leaflet-control-attribution {
+	background: #fff;
+	background: rgba(255, 255, 255, 0.8);
+	margin: 0;
+	}
+.leaflet-control-attribution,
+.leaflet-control-scale-line {
+	padding: 0 5px;
+	color: #333;
+	line-height: 1.4;
+	}
+.leaflet-control-attribution a {
+	text-decoration: none;
+	}
+.leaflet-control-attribution a:hover,
+.leaflet-control-attribution a:focus {
+	text-decoration: underline;
+	}
+.leaflet-attribution-flag {
+	display: inline !important;
+	vertical-align: baseline !important;
+	width: 1em;
+	height: 0.6669em;
+	}
+.leaflet-left .leaflet-control-scale {
+	margin-left: 5px;
+	}
+.leaflet-bottom .leaflet-control-scale {
+	margin-bottom: 5px;
+	}
+.leaflet-control-scale-line {
+	border: 2px solid #777;
+	border-top: none;
+	line-height: 1.1;
+	padding: 2px 5px 1px;
+	white-space: nowrap;
+	-moz-box-sizing: border-box;
+	     box-sizing: border-box;
+	background: rgba(255, 255, 255, 0.8);
+	text-shadow: 1px 1px #fff;
+	}
+.leaflet-control-scale-line:not(:first-child) {
+	border-top: 2px solid #777;
+	border-bottom: none;
+	margin-top: -2px;
+	}
+.leaflet-control-scale-line:not(:first-child):not(:last-child) {
+	border-bottom: 2px solid #777;
+	}
+.leaflet-touch .leaflet-control-attribution,
+.leaflet-touch .leaflet-control-layers,
+.leaflet-touch .leaflet-bar {
+	box-shadow: none;
+	}
+.leaflet-touch .leaflet-control-layers,
+.leaflet-touch .leaflet-bar {
+	border: 2px solid rgba(0,0,0,0.2);
+	background-clip: padding-box;
+	}
+.leaflet-popup {
+	position: absolute;
+	text-align: center;
+	margin-bottom: 20px;
+	}
+.leaflet-popup-content-wrapper {
+	padding: 1px;
+	text-align: left;
+	border-radius: 12px;
+	}
+.leaflet-popup-content {
+	margin: 13px 24px 13px 20px;
+	line-height: 1.3;
+	font-size: 13px;
+	font-size: 1.08333em;
+	min-height: 1px;
+	}
+.leaflet-popup-content p {
+	margin: 17px 0;
+	margin: 1.3em 0;
+	}
+.leaflet-popup-tip-container {
+	width: 40px;
+	height: 20px;
+	position: absolute;
+	left: 50%;
+	margin-top: -1px;
+	margin-left: -20px;
+	overflow: hidden;
+	pointer-events: none;
+	}
+.leaflet-popup-tip {
+	width: 17px;
+	height: 17px;
+	padding: 1px;
+	margin: -10px auto 0;
+	pointer-events: auto;
+	-webkit-transform: rotate(45deg);
+	   -moz-transform: rotate(45deg);
+	    -ms-transform: rotate(45deg);
+	        transform: rotate(45deg);
+	}
+.leaflet-popup-content-wrapper,
+.leaflet-popup-tip {
+	background: white;
+	color: #333;
+	box-shadow: 0 3px 14px rgba(0,0,0,0.4);
+	}
+.leaflet-container a.leaflet-popup-close-button {
+	position: absolute;
+	top: 0;
+	right: 0;
+	border: none;
+	text-align: center;
+	width: 24px;
+	height: 24px;
+	font: 16px/24px Tahoma, Verdana, sans-serif;
+	color: #757575;
+	text-decoration: none;
+	background: transparent;
+	}
+.leaflet-container a.leaflet-popup-close-button:hover,
+.leaflet-container a.leaflet-popup-close-button:focus {
+	color: #585858;
+	}
+.leaflet-popup-scrolled {
+	overflow: auto;
+	}
+.leaflet-oldie .leaflet-popup-content-wrapper {
+	-ms-zoom: 1;
+	}
+.leaflet-oldie .leaflet-popup-tip {
+	width: 24px;
+	margin: 0 auto;
+	-ms-filter: "progid:DXImageTransform.Microsoft.Matrix(M11=0.70710678, M12=0.70710678, M21=-0.70710678, M22=0.70710678)";
+	filter: progid:DXImageTransform.Microsoft.Matrix(M11=0.70710678, M12=0.70710678, M21=-0.70710678, M22=0.70710678);
+	}
+.leaflet-oldie .leaflet-control-zoom,
+.leaflet-oldie .leaflet-control-layers,
+.leaflet-oldie .leaflet-popup-content-wrapper,
+.leaflet-oldie .leaflet-popup-tip {
+	border: 1px solid #999;
+	}
+.leaflet-div-icon {
+	background: #fff;
+	border: 1px solid #666;
+	}
+.leaflet-tooltip {
+	position: absolute;
+	padding: 6px;
+	background-color: #fff;
+	border: 1px solid #fff;
+	border-radius: 3px;
+	color: #222;
+	white-space: nowrap;
+	-webkit-user-select: none;
+	-moz-user-select: none;
+	-ms-user-select: none;
+	user-select: none;
+	pointer-events: none;
+	box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+	}
+.leaflet-tooltip.leaflet-interactive {
+	cursor: pointer;
+	pointer-events: auto;
+	}
+.leaflet-tooltip-top:before,
+.leaflet-tooltip-bottom:before,
+.leaflet-tooltip-left:before,
+.leaflet-tooltip-right:before {
+	position: absolute;
+	pointer-events: none;
+	border: 6px solid transparent;
+	background: transparent;
+	content: "";
+	}
+.leaflet-tooltip-bottom {
+	margin-top: 6px;
+}
+.leaflet-tooltip-top {
+	margin-top: -6px;
+}
+.leaflet-tooltip-bottom:before,
+.leaflet-tooltip-top:before {
+	left: 50%;
+	margin-left: -6px;
+	}
+.leaflet-tooltip-top:before {
+	bottom: 0;
+	margin-bottom: -12px;
+	border-top-color: #fff;
+	}
+.leaflet-tooltip-bottom:before {
+	top: 0;
+	margin-top: -12px;
+	margin-left: -6px;
+	border-bottom-color: #fff;
+	}
+.leaflet-tooltip-left {
+	margin-left: -6px;
+}
+.leaflet-tooltip-right {
+	margin-left: 6px;
+}
+.leaflet-tooltip-left:before,
+.leaflet-tooltip-right:before {
+	top: 50%;
+	margin-top: -6px;
+	}
+.leaflet-tooltip-left:before {
+	right: 0;
+	margin-right: -12px;
+	border-left-color: #fff;
+	}
+.leaflet-tooltip-right:before {
+	left: 0;
+	margin-left: -12px;
+	border-right-color: #fff;
+	}
+@media print {
+	.leaflet-control {
+		-webkit-print-color-adjust: exact;
+		print-color-adjust: exact;
+		}
+	}
+</style>
+
+<header class="top">
+  <h1 class="brand">충북 EV 요금 관제<small>혼잡도 기반 동적 요금 시뮬레이터</small></h1>
+  <nav class="regions" id="regions" aria-label="시·군 선택"></nav>
+  <div class="source">
+    <button type="button" class="file-btn" id="reload" hidden>새로 받기</button>
+    <button type="button" class="file-btn share" id="share" hidden>폰으로 열기</button>
+  </div>
+</header>
+
+<main class="app">
+  <div class="map-pane">
+    <div id="map" role="region" aria-label="선택한 시·군의 충전소 지도"></div>
+    <div class="map-note" id="map-note"></div>
+    <div class="map-tools">
+      <button type="button" id="zin" aria-label="확대">+</button>
+      <button type="button" id="zout" aria-label="축소">−</button>
+      <button type="button" id="zfit" class="fit" aria-label="지역 전체 보기">맞춤</button>
+      <button type="button" id="zme" class="fit" aria-label="내 위치로 이동">내 위치</button>
+    </div>
+    <div class="me-note" id="me-note" hidden></div>
+    <div class="loading" id="loading" hidden></div>
+    <div class="timebar">
+      <div class="clock">
+        <button type="button" class="play" id="play" aria-pressed="false" aria-label="하루 재생" title="하루 재생"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5v11l9.5-5.5z"/></svg></button>
+        <div class="hour num" id="hour-big">19<span>시</span></div>
+      </div>
+      <div class="scrub">
+        <input type="range" id="hour" min="0" max="23" step="1" value="19" aria-label="시각">
+        <svg id="spark" aria-hidden="true"></svg>
+      </div>
+    </div>
+  </div>
+
+  <aside class="panel" aria-label="지역 요약과 요금 정책">
+    <section>
+      <h2 id="r-name">청주시</h2>
+      <p class="sub" id="r-sub"></p>
+      <p class="status" id="status" role="status"></p>
+      <div class="share-box" id="share-box" hidden></div>
+      <form class="key-box" id="key-box" hidden>
+        <label for="key-input">실제 데이터를 보려면 공공데이터포털 인증키를 한 번 넣어 주세요. 이 맥의 서버에만 저장됩니다.</label>
+        <div class="key-row">
+          <input id="key-input" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="인증키 (Decoding 키)">
+          <button type="submit" class="file-btn share" id="key-save">실제 데이터 켜기</button>
+        </div>
+        <span class="key-msg" id="key-msg" role="status"></span>
+      </form>
+      <div class="stack" id="stack" aria-hidden="true"></div>
+      <div class="legend" id="legend"></div>
+      <div class="figs">
+        <div class="fig"><div class="v num" id="f-idle">-</div><div class="k">대기율</div></div>
+        <div class="fig"><div class="v num" id="f-price">-</div><div class="k">급속 평균 단가</div></div>
+        <div class="fig"><div class="v num" id="f-redir">-</div><div class="k">옮겨 갈 곳 안내</div></div>
+      </div>
+    </section>
+
+    <section class="detail" id="detail" hidden></section>
+
+    <section id="pairs-sec">
+      <h3>혼잡 거점에서 옮겨 갈 곳</h3>
+      <div class="pairs" id="pairs"></div>
+    </section>
+
+    <section>
+      <h3>요금 정책</h3>
+      <div class="ctrl">
+        <label for="th">여유로 볼 대기율 기준 <output id="th-o" for="th"></output><input type="range" id="th" min="0.1" max="0.9" step="0.05" value="0.5"></label>
+        <label for="disc">여유 거점 할인 <output id="disc-o" for="disc"></output><input type="range" id="disc" min="0" max="0.5" step="0.05" value="0.2"></label>
+        <label for="sur">만차 거점 할증 <output id="sur-o" for="sur"></output><input type="range" id="sur" min="0" max="0.5" step="0.05" value="0.15"></label>
+        <label for="rad">대체 거점 탐색 반경 <output id="rad-o" for="rad"></output><input type="range" id="rad" min="0.5" max="10" step="0.5" value="3"></label>
+        <div class="check"><input type="checkbox" id="tod"><label for="tod" style="display:block">시간대 가중치 적용<small>11~14시 태양광 피크 ×0.90, 18~22시 저녁 피크 ×1.05 (가정값)</small></label></div>
+        <div class="check"><input type="checkbox" id="lim" checked><label for="lim" style="display:block">이용자 제한 충전소 제외<small>아파트 입주민 전용처럼 누구나 쓸 수 없는 곳</small></label></div>
+      </div>
+      <table class="ptable num" id="ptable"></table>
+      <p class="sub" style="margin-top:6px">표는 공공 요금 기준 예시입니다. 지도와 목록의 거점 단가는 그 충전소 운영사의 실제 회원가로 계산합니다.</p>
+    </section>
+  </aside>
+</main>
+
+<div class="below">
+  <div class="card">
+    <div class="tbl-head">
+      <h3>거점 목록</h3>
+      <input type="search" id="q" placeholder="충전소 이름이나 운영기관 검색" aria-label="거점 검색">
+    </div>
+    <div class="tbl-wrap"><table class="stbl" id="stbl"></table></div>
+  </div>
+  <div class="card method">
+    <h3>요금 계산 방식</h3>
+    <div class="formula"><b>동적 단가</b> = 운영사 실제 회원가(출력 구간별) × 혼잡 배수 × 시간대 배수</div>
+    <ol>
+      <li>충전기 상태로 대기, 충전 중, 고장을 셉니다.</li>
+      <li>대기율은 대기 ÷ (대기 + 충전 중)입니다. 고장 난 충전기는 계산에서 뺍니다.</li>
+      <li>급속과 완속을 따로 판정합니다. 대기율이 기준 이상이면 여유(할인), 대기가 한 대라도 있으면 보통, 전부 충전 중이면 혼잡(할증)입니다.</li>
+      <li>혼잡하거나 고장 난 거점마다 반경 안에서 가장 가까운, 같은 속도가 여유인 거점을 안내합니다.</li>
+    </ol>
+    <p>기본 단가는 각 충전소 운영사의 실제 회원가입니다. 무공해차 통합누리집(ev.or.kr) 사업자별 요금 매트릭스에서 102개 운영사의 출력 구간별(완속 30kW 미만, 중속 30~49kW, 급속 50~99kW, 급속 100~199kW, 초급속 200kW 이상) 회원가·비회원가를 받아, 충전기의 운영기관과 출력에 맞춰 붙였습니다. 운영사가 그 출력 구간 요금을 올리지 않았으면 같은 운영사의 가장 가까운 구간을, 운영사 요금이 아예 없으면 공공 요금(기후에너지환경부, 2026.8.1 시행: 295~393.1원)을 씁니다. 충북 충전기의 약 92%가 운영사 실제 요금으로 계산됩니다.</p>
+  </div>
+</div>
+
+<footer>
+  <span>충전기 데이터: 한국환경공단 전기자동차 충전소 정보 API(공공데이터포털). 시·군 경계: 통계청 2018 시군구 경계.</span>
+  <span>충전소 이름, 위치, 상태는 실제 API 값이고, 기본 요금은 무공해차 통합누리집에 등재된 운영사 회원가입니다. 혼잡 배수를 곱한 동적 단가는 정책 시뮬레이션 값이며 실제 청구 요금이 아닙니다.</span>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<script type="application/json" id="geo">/*__GEO__*/</script>
+<script type="application/json" id="prices">/*__PRICES__*/</script>
+<script>
+(() => {
+"use strict";
+// ───────────────────────── 설정 (저장소 config.py와 같은 값) ─────────────────────────
+const REGIONS = [
+  { name: "청주시", code: "43110", center: [36.6424, 127.4890] },
+  { name: "충주시", code: "43130", center: [36.9910, 127.9259] },
+  { name: "제천시", code: "43150", center: [37.1326, 128.1910] },
+  { name: "보은군", code: "43720", center: [36.4894, 127.7295] },
+  { name: "옥천군", code: "43730", center: [36.3064, 127.5713] },
+  { name: "영동군", code: "43740", center: [36.1750, 127.7834] },
+  { name: "증평군", code: "43745", center: [36.7853, 127.5815] },
+  { name: "진천군", code: "43750", center: [36.8554, 127.4356] },
+  { name: "괴산군", code: "43760", center: [36.8153, 127.7866] },
+  { name: "음성군", code: "43770", center: [36.9401, 127.6905] },
+  { name: "단양군", code: "43800", center: [36.9845, 128.3655] },
+];
+const SLOW_TYPES = new Set(["02", "08"]);
+const FAST_TYPES = new Set(["01", "03", "04", "05", "06", "07", "09", "10"]);
+const FAST_OUTPUT_KW = 30;
+const DEFAULT_KW = { 급속: 50, 완속: 7, 기타: 7 };
+// 운영사별 실제 충전요금 (data/operator_prices.csv → 빌드 때 삽입, 규칙은 utils/prices.py와 같음)
+const PRICES = JSON.parse(document.getElementById("prices").textContent);
+const TIER_UP = PRICES.tiers.map(u => u ?? Infinity);
+const KIND = { A0: "공공시설", B0: "주차시설", C0: "휴게시설", D0: "관광시설", E0: "상업시설", F0: "차량정비시설",
+               G0: "기타시설", H0: "공동주택시설", I0: "근린생활시설", J0: "교육문화시설" };
+const BANDS = [{ s: 11, e: 14, m: 0.90, label: "태양광 피크 할인" }, { s: 18, e: 22, m: 1.05, label: "저녁 피크 할증" }];
+const STATUS = ["여유", "보통", "혼잡", "불가", "미확인"];
+const STATUS_LABEL = { 여유: "여유", 보통: "보통", 혼잡: "혼잡", 불가: "이용 불가", 미확인: "상태 미확인" };
+
+// ───────────────────────── 요금 로직 (utils/logic.py 이식) ─────────────────────────
+const tierIndex = kw => { const i = TIER_UP.findIndex(up => kw < up); return i < 0 ? TIER_UP.length - 1 : i; };
+const normOp = name => {
+  const s = String(name || "").replace(/\(주\)|㈜|주식회사|\(유\)|유한회사/g, "").replace(/\([^)]*\)/g, "").replace(/\s+/g, "").toUpperCase();
+  return PRICES.aliases[s] || s;
+};
+const pickTier = (vals, i) => {
+  if (vals[i] != null) return { v: vals[i], exact: true };
+  for (let d = 1; d < vals.length; d++) for (const j of [i - d, i + d]) if (j >= 0 && j < vals.length && vals[j] != null) return { v: vals[j], exact: false };
+  return null;
+};
+// 충전기 한 대의 회원 단가: 운영사 해당 구간 → 같은 운영사 인접 구간 → 공공 단가(미등재)
+function priceFor(busi, kw) {
+  const i = tierIndex(kw > 0 ? kw : 7), op = PRICES.ops[normOp(busi)];
+  const m = op && pickTier(op.m, i), x = op && pickTier(op.x, i);
+  if (m) return { base: m.v, src: m.exact ? "운영사" : "운영사(인접 구간)", op: op.n, upd: op.u, from: op.s, non: x ? x.v : null };
+  const pub = PRICES.ops[PRICES.public];
+  return { base: pub.m[i], src: "공공 기준(미등재)", op: pub.n, upd: pub.u, from: pub.s, non: null };
+}
+const publicRate = kw => PRICES.ops[PRICES.public].m[tierIndex(kw)];
+const classifySpeed = (t, kw) => SLOW_TYPES.has(t) ? "완속" : FAST_TYPES.has(t) ? "급속" : kw > 0 ? (kw >= FAST_OUTPUT_KW ? "급속" : "완속") : "기타";
+function classifyStatus(avail, charging, fault, th) {
+  const usable = avail + charging;
+  if (usable === 0) return fault > 0 ? "불가" : "미확인";
+  if (avail / usable >= th) return "여유";
+  return avail > 0 ? "보통" : "혼잡";
+}
+const congestionMult = (s, p) => ({ 여유: 1 - p.disc, 보통: 1, 혼잡: 1 + p.sur })[s] ?? null;
+function timeMult(h, p) {
+  if (!p.tod) return { m: 1, label: "" };
+  for (const b of BANDS) if (b.s < b.e ? (h >= b.s && h < b.e) : (h >= b.s || h < b.e)) return { m: b.m, label: b.label };
+  return { m: 1, label: "" };
+}
+const round1 = v => Math.round(v * 10) / 10;
+
+function prepare(rows, excludeLimited) {
+  const seen = new Set(), out = [];
+  for (const r of rows) {
+    const t = k => (r[k] == null ? "" : String(r[k]).trim());
+    const T = k => { const v = t(k); return /^(null|none|nan)$/i.test(v) ? "" : v; };
+    if (T("delYn").toUpperCase() === "Y") continue;
+    const lat = +r.lat, lng = +r.lng;
+    if (!(lat >= 33 && lat <= 39 && lng >= 124 && lng <= 132)) continue;
+    const key = T("statId") + "|" + T("chgerId");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const limited = T("limitYn").toUpperCase() === "Y";
+    if (excludeLimited && limited) continue;
+    let type = T("chgerType"); if (type) type = type.padStart(2, "0");
+    const outKw = parseFloat(r.output);
+    const speed = classifySpeed(type, outKw > 0 ? outKw : 0);
+    const kw = outKw > 0 ? outKw : DEFAULT_KW[speed];
+    const stat = T("stat");
+    const kind = T("kind") || T("kindDetail").slice(0, 2);
+    const pf = T("parkingFree").toUpperCase();
+    out.push({
+      statId: T("statId"), name: T("statNm") || "이름 없음", addr: (T("addr") + " " + T("addrDetail")).trim(),
+      lat, lng, busi: T("busiNm") || "운영기관 미표기", facility: KIND[kind] || "기타시설",
+      parking: pf === "Y" ? "무료" : pf === "N" ? "유료" : "현장 확인", useTime: T("useTime"),
+      speed, kw, ...priceFor(T("busiNm"), kw), avail: stat === "2", charging: stat === "3", fault: ["1", "4", "5"].includes(stat),
+    });
+  }
+  return out;
+}
+
+function summarize(chargers, p, hour) {
+  const by = new Map();
+  const sub = () => ({ total: 0, avail: 0, charging: 0, fault: 0, base: 0, kw: 0, src: "", non: null, upd: "", status: "", price: null });
+  for (const c of chargers) {
+    let s = by.get(c.statId);
+    if (!s) {
+      s = { id: c.statId, name: c.name, addr: c.addr, lat: c.lat, lng: c.lng, busi: c.busi, facility: c.facility, parking: c.parking,
+            useTime: c.useTime, total: 0, avail: 0, charging: 0, fault: 0, fast: sub(), slow: sub(), alt: null };
+      by.set(c.statId, s);
+    }
+    s.total++; s.avail += c.avail; s.charging += c.charging; s.fault += c.fault;
+    if (c.speed !== "기타") {
+      const x = c.speed === "급속" ? s.fast : s.slow;
+      x.total++; x.avail += c.avail; x.charging += c.charging; x.fault += c.fault;
+      // 대표 단가: 가장 높은 출력 충전기의 운영사 단가
+      if (c.kw > x.kw || (c.kw === x.kw && c.base > x.base)) Object.assign(x, { kw: c.kw, base: c.base, src: c.src, non: c.non, upd: c.upd, from: c.from });
+    }
+  }
+  const tod = timeMult(hour, p);
+  const list = [...by.values()];
+  for (const s of list) {
+    s.status = classifyStatus(s.avail, s.charging, s.fault, p.th);
+    for (const x of [s.fast, s.slow]) {
+      if (!x.total) continue;
+      x.status = classifyStatus(x.avail, x.charging, x.fault, p.th);
+      const m = congestionMult(x.status, p);
+      x.mult = m; x.price = m == null ? null : round1(x.base * m * tod.m);
+    }
+    s.price = s.fast.price ?? s.slow.price;
+    s.ratio = (s.avail + s.charging) ? s.avail / (s.avail + s.charging) : null;
+  }
+  return { list, tod };
+}
+
+function haversine(a, b) {
+  const R = 6371, rad = Math.PI / 180;
+  const dLat = (b.lat - a.lat) * rad, dLng = (b.lng - a.lng) * rad;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+function recommend(list, radius) {
+  for (const s of list) s.alt = null;
+  for (const key of ["fast", "slow"]) {
+    const src = list.filter(s => (s.status === "혼잡" || s.status === "불가") && (key === "fast" ? s.fast.total > 0 : s.fast.total === 0));
+    const dst = list.filter(s => s[key].status === "여유");
+    for (const a of src) {
+      let best = null, bd = Infinity;
+      for (const b of dst) { if (b === a) continue; const d = haversine(a, b); if (d < bd) { bd = d; best = b; } }
+      if (best && bd <= radius) {
+        // 절약액 = 지금 거점 단가 − 옮겨 갈 거점 단가 (둘 다 운영사 실제 요금 × 혼잡 배수). 같은 속도끼리 비교.
+        const save = a[key].total > 0 && a[key].price != null && best[key].price != null ? a[key].price - best[key].price : null;
+        a.alt = { st: best, dist: bd, speed: key === "fast" ? "급속" : "완속", kw: best[key].kw, price: best[key].price, save };
+      }
+    }
+  }
+}
+
+// ───────────────────────── 지도 데이터 ─────────────────────────
+const GEO = JSON.parse(document.getElementById("geo").textContent);
+for (const f of GEO.features) {  // d3-geo는 시계 방향 외곽선을 기대하므로 필요하면 뒤집음
+  if (d3.geoArea(f) > 2 * Math.PI) {
+    const g = f.geometry;
+    if (g.type === "Polygon") g.coordinates.forEach(r => r.reverse());
+    else g.coordinates.forEach(p => p.forEach(r => r.reverse()));
+  }
+}
+const FEATURES = new Map(GEO.features.map(f => [f.properties.zscode, f]));
+const regionByCode = new Map(REGIONS.map(r => [r.code, r]));
+
+// ───────────────────────── 상태 ─────────────────────────
+const kstHour = () => (new Date().getUTCHours() + 9) % 24;
+const todayKST = () => new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
+const state = {
+  region: REGIONS[0], hour: kstHour(), live: {}, history: {}, server: false, loading: true, notice: "",
+  p: { th: 0.5, disc: 0.2, sur: 0.15, rad: 3, tod: false, lim: true },
+  hidden: new Set(), selected: null, sort: { key: "status", dir: 1 }, q: "",
+  view: null,
+};
+
+// 서버에서 받은 실제 데이터. 아직 없으면 null
+const external = (code = state.region.code) => state.live[code] || null;
+// 기록(서버의 /api/history) 한 시각분 → 충전기 목록 (prepare() 결과와 같은 모양)
+function chargersFromHistory(hist, slot) {
+  const out = [];
+  for (const [id, c] of Object.entries(slot.s)) {
+    const m = hist.stations[id];
+    if (!m) continue;
+    const base = { statId: id, name: m.n, addr: m.a || "", lat: m.la, lng: m.ln, busi: m.b, facility: m.f, parking: m.p, useTime: "" };
+    const add = (speed, kw, counts) => { const pr = priceFor(m.b, kw); ["a", "c", "f"].forEach((k, i) => {
+      for (let n = 0; n < counts[i]; n++) out.push({ ...base, speed, kw, ...pr, avail: k === "a", charging: k === "c", fault: k === "f" });
+    }); };
+    if (m.fk || m.fb) add("급속", m.fk || 50, c.slice(0, 3));
+    if (m.sk || m.sb) add("완속", m.sk || 7, c.slice(3, 6));
+  }
+  return out;
+}
+const congestedInSlot = slot => Object.values(slot.s).filter(c => c[0] + c[3] === 0 && c[1] + c[4] > 0).length;
+
+// 지금 상태가 해당하는 시각: 서버 모드는 현재 시각, 정적(GitHub Pages) 모드는 마지막 수집 시각
+const liveHour = (code = state.region.code) => state.live[code]?.hour ?? kstHour();
+
+function compute(hour = state.hour) {
+  const ext = external();
+  let chargers = null, replay = null, noRecord = false;
+  if (ext && hour !== liveHour()) {
+    const hist = state.history[state.region.code];
+    const slot = hist && hist.hours[String(hour)];
+    if (slot) { chargers = chargersFromHistory(hist, slot); replay = slot.t; } else noRecord = true;
+  }
+  if (!chargers && ext && ext.chargers) chargers = ext.chargers;
+  if (!chargers) chargers = prepare(ext ? ext.rows : [], state.p.lim);
+  const { list, tod } = summarize(chargers, state.p, hour);
+  recommend(list, state.p.rad);
+  return { list, tod, replay, noRecord };
+}
+
+// ───────────────────────── 지도 (Leaflet + OpenStreetMap 타일: 도로·지명) ─────────────────────────
+const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const C = { free: cssVar("--free"), mid: cssVar("--mid"), busy: cssVar("--busy"), down: cssVar("--down"),
+            ink: cssVar("--ink"), ink2: cssVar("--ink-2"), ink3: cssVar("--ink-3") };
+const DOT_STYLE = {
+  여유: { fillColor: C.free, color: "#fff", weight: 1.3, fillOpacity: 1 },
+  보통: { fillColor: C.mid, color: C.ink2, weight: 0.8, fillOpacity: 1 },
+  혼잡: { fillColor: C.busy, color: "#fff", weight: 1.3, fillOpacity: 1 },
+  불가: { fillColor: "#fff", color: C.down, weight: 2, fillOpacity: 1 },
+  미확인: { fillColor: "#fff", color: C.ink3, weight: 1.2, fillOpacity: 1, dashArray: "2 2" },
+};
+const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const ADMIN = /admin/i.test(location.hash + location.search);   // 관리자 확인용: https://…/#admin
+const map = L.map("map", { zoomControl: false, preferCanvas: true, minZoom: 8, maxZoom: 18, zoomSnap: 0.5 });
+map.attributionControl.setPrefix(false);
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> 기여자',
+}).addTo(map);
+const canvas = L.canvas({ padding: 0.4 });
+const regionStyle = f => f.properties.zscode === state.region.code
+  ? { color: C.ink, weight: 2.2, fill: false, interactive: false }
+  : { color: C.ink3, weight: 1, fillColor: "#ffffff", fillOpacity: 0.55, interactive: true };
+const regionLayer = L.geoJSON(GEO, {
+  style: regionStyle,
+  onEachFeature: (f, layer) => layer.on("click", () => {
+    if (f.properties.zscode !== state.region.code) setRegion(regionByCode.get(f.properties.zscode));
+  }),
+}).addTo(map);
+const labelLayer = L.layerGroup().addTo(map), linkLayer = L.layerGroup().addTo(map),
+      dotLayer = L.layerGroup().addTo(map), selLayer = L.layerGroup().addTo(map);
+const dotIndex = new Map();
+
+function fitRegion(animate = false) {
+  const b = L.geoJSON(FEATURES.get(state.region.code)).getBounds();
+  map.fitBounds(b, { padding: [24, 24], animate: animate && !reduced });
+}
+function fit() {
+  map.invalidateSize();
+  regionLayer.setStyle(regionStyle);
+  labelLayer.clearLayers();
+  for (const f of GEO.features) {
+    if (f.properties.zscode === state.region.code) continue;
+    const [lng, lat] = d3.geoCentroid(f);
+    labelLayer.addLayer(L.marker([lat, lng], { interactive: false, keyboard: false,
+      icon: L.divIcon({ className: "rlabel", html: `<span>${esc(f.properties.name)}</span>`, iconSize: [0, 0] }) }));
+  }
+  fitRegion(false);
+}
+
+function drawSelection() {
+  selLayer.clearLayers();
+  const s = state.selected && state.view.list.find(x => x.id === state.selected);
+  if (s) selLayer.addLayer(L.circleMarker([s.lat, s.lng], { renderer: canvas, radius: s.r + 4, color: C.ink, weight: 2, fill: false, interactive: false }));
+}
+
+function drawMap() {
+  const list = state.view.list;
+  for (const s of list) s.r = Math.min(3.6 + 1.3 * Math.sqrt(s.total), 9.5);
+  const order = { 미확인: 0, 불가: 1, 보통: 2, 여유: 3, 혼잡: 4 };
+  const shown = list.filter(s => !state.hidden.has(s.status)).sort((a, b) => order[a.status] - order[b.status]);
+  linkLayer.clearLayers(); dotLayer.clearLayers(); dotIndex.clear();
+  const links = state.p.rad > 0 ? shown.filter(s => s.alt && !state.hidden.has(s.alt.st.status)) : [];
+  for (const s of links) {
+    const a = [s.lat, s.lng], b = [s.alt.st.lat, s.alt.st.lng];
+    // 흰 테두리 위에 진한 점선: 지도 배경·점 색과 겹쳐도 잘 보이게
+    linkLayer.addLayer(L.polyline([a, b], { renderer: canvas, color: "#fff", weight: 6.5, opacity: 0.95, lineCap: "round", interactive: false }));
+    linkLayer.addLayer(L.polyline([a, b], { renderer: canvas, color: C.ink, weight: 3, dashArray: "7 5", opacity: 1, lineCap: "butt", interactive: false }));
+    const p1 = map.latLngToLayerPoint(a), p2 = map.latLngToLayerPoint(b);   // 메르카토르에서는 확대해도 각도가 같음
+    const deg = Math.atan2(p2.y - p1.y, p2.x - p1.x) * 180 / Math.PI;
+    const back = (s.alt.st.r || 6) + 18;
+    linkLayer.addLayer(L.marker(b, { interactive: false, keyboard: false, icon: L.divIcon({ className: "", iconSize: [0, 0],
+      html: `<svg class="arrow-head" width="18" height="18" viewBox="-2 -2 18 18" style="transform:rotate(${deg}deg) translate(-${back}px,-9px)"><path d="M0,0 L14,7 L0,14z"/></svg>` }) }));
+  }
+  for (const s of shown) {
+    const m = L.circleMarker([s.lat, s.lng], { renderer: canvas, radius: s.r, ...DOT_STYLE[s.status] })
+      .bindTooltip(`<b>${esc(s.name)}</b><br>${STATUS_LABEL[s.status]}${s.price != null ? ", " + s.price.toFixed(1) + "원/kWh" : ""}`,
+                   { direction: "top", offset: [0, -s.r], className: "dtip" })
+      .on("click", () => select(s.id));
+    dotLayer.addLayer(m); dotIndex.set(s.id, m);
+  }
+  if (!list.find(s => s.id === state.selected)) state.selected = null;
+  drawSelection();
+}
+
+function focusOn(s) {
+  map.setView([s.lat, s.lng], Math.max(map.getZoom(), 14), { animate: !reduced });
+}
+
+// ───────────────────────── 패널 ─────────────────────────
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const fmt = v => v == null ? "–" : v.toFixed(1);
+const COLOR_VAR = { 여유: "var(--free)", 보통: "var(--mid)", 혼잡: "var(--busy)", 불가: "var(--down)", 미확인: "var(--ink-3)" };
+
+function renderSummary() {
+  const { list, tod } = state.view;
+  const counts = Object.fromEntries(STATUS.map(s => [s, 0]));
+  list.forEach(s => counts[s.status]++);
+  const ext = external();
+  const flag = ext && ext.kind === "snapshot" ? '<span class="snap-flag" title="실시간 조회가 실패해 마지막으로 저장된 실제 데이터를 보여줍니다">저장본</span>' : "";
+  document.getElementById("r-name").innerHTML = esc(state.region.name) + flag;
+  const chg = list.reduce((a, s) => a + s.total, 0);
+  const totals = `충전소 ${list.length.toLocaleString()}곳과 충전기 ${chg.toLocaleString()}대`;
+  document.getElementById("r-sub").textContent = !ext ? emptyMsg()
+    : state.view.replay ? `${state.hour}시 기록(${state.view.replay.slice(0, 2)}:${state.view.replay.slice(2)} 수집) 기준, ${totals}`
+    : `${ext.when} ${({ live: "조회", collected: "수집", snapshot: "저장" })[ext.kind] || "기준"} 기준, ${totals}`;
+  const ld = document.getElementById("loading");
+  ld.hidden = !!ext; ld.textContent = ext ? "" : emptyMsg();
+  const total = list.length || 1;
+  document.getElementById("stack").innerHTML = STATUS.filter(s => counts[s])
+    .map(s => `<i style="width:${counts[s] / total * 100}%;background:${COLOR_VAR[s]}" title="${STATUS_LABEL[s]} ${counts[s]}곳"></i>`).join("");
+  document.getElementById("legend").innerHTML = STATUS.map(s =>
+    `<button type="button" data-s="${s}" aria-pressed="${!state.hidden.has(s)}" title="지도에서 ${state.hidden.has(s) ? "보이기" : "숨기기"}">
+       <span class="sw s-${s}"></span>${STATUS_LABEL[s]}<span class="cnt num">${counts[s]}</span></button>`).join("");
+  const avail = list.reduce((a, s) => a + s.avail, 0), ch = list.reduce((a, s) => a + s.charging, 0);
+  document.getElementById("f-idle").innerHTML = (avail + ch) ? `${Math.round(avail / (avail + ch) * 100)}<small>%</small>` : "–";
+  const fp = list.map(s => s.fast.price).filter(v => v != null);
+  document.getElementById("f-price").innerHTML = fp.length ? `${(fp.reduce((a, b) => a + b, 0) / fp.length).toFixed(1)}<small>원</small>` : "–";
+  const need = list.filter(s => s.status === "혼잡" || s.status === "불가");
+  const ok = need.filter(s => s.alt).length;
+  document.getElementById("f-redir").innerHTML = need.length ? `${ok}<small>/ ${need.length}곳</small>` : "0<small>곳</small>";
+  const notes = [];
+  if (state.view.replay) notes.push(`${state.hour}시 실측 기록을 보고 있습니다`);
+  else if (state.view.noRecord) notes.push(`${state.hour}시 기록이 없어 지금 상태를 보여줍니다`);
+  if (tod.label) notes.push(`${tod.label} ×${tod.m.toFixed(2)} 적용 중`);
+  document.getElementById("map-note").textContent = notes.join(". ");
+  document.getElementById("map-note").hidden = !notes.length;
+}
+
+function renderPairs() {
+  const rows = state.view.list.filter(s => s.status === "혼잡" && s.alt)
+    .sort((a, b) => b.charging - a.charging || a.alt.dist - b.alt.dist).slice(0, 6);
+  const el = document.getElementById("pairs");
+  if (!rows.length) { el.innerHTML = `<p class="empty">지금은 반경 ${state.p.rad}km 안에서 안내할 혼잡 거점이 없습니다.</p>`; return; }
+  el.innerHTML = rows.map(s => {
+    const save = s.alt.save;
+    return `<button type="button" class="pair" data-id="${esc(s.id)}">
+      <span class="route"><i class="dotsw" style="background:var(--busy)"></i><span>${esc(s.name)}</span></span>
+      <span class="route to"><svg width="14" height="12" viewBox="0 0 14 12" aria-hidden="true"><path d="M2 0v6h10M8 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>
+        <i class="dotsw" style="background:var(--free)"></i><span>${esc(s.alt.st.name)}</span></span>
+      <span class="meta num">${s.alt.dist.toFixed(1)}km 거리, ${s.alt.speed} ${Math.round(s.alt.kw)}kW ${fmt(s.alt.price)}원${save > 0 ? `, kWh당 ${save.toFixed(0)}원 저렴` : ""}</span>
+    </button>`;
+  }).join("");
+}
+
+// 단가 출처 한 줄: 운영사 요금표의 어느 값을 썼는지, 비회원가는 얼마인지
+function priceNote(s) {
+  const parts = [];
+  for (const [label, x] of [["급속", s.fast], ["완속", s.slow]]) {
+    if (!x.total) continue;
+    const src = x.src === "운영사" ? `${esc(s.busi)} 회원가` : x.src === "운영사(인접 구간)" ? `${esc(s.busi)} 회원가(가장 가까운 출력 구간)` : "운영사 요금 미등재, 공공 단가 적용";
+    parts.push(`${label}: ${src}${x.non != null ? `, 비회원 ${x.non.toFixed(1)}원` : ""}`);
+  }
+  const x = s.fast.total ? s.fast : s.slow;
+  return `<p class="sub" style="margin-top:8px">${parts.join(" · ")}${x.upd ? ` (${esc(x.from)}, ${esc(x.upd)} 갱신)` : ""}</p>`;
+}
+
+function renderDetail() {
+  const el = document.getElementById("detail");
+  const s = state.selected && state.view.list.find(x => x.id === state.selected);
+  if (!s) { el.hidden = true; drawSelection(); return; }
+  const { tod } = state.view;
+  const row = (label, x) => !x.total ? "" : `<tr><td>${label}<small style="display:block;color:var(--ink-2)">${Math.round(x.kw)}kW</small></td><td>${x.avail}/${x.total}</td><td>${x.base.toFixed(1)}</td>
+      <td class="c-${x.status}">${x.mult == null ? "–" : "×" + x.mult.toFixed(2)}${tod.m !== 1 ? " ×" + tod.m.toFixed(2) : ""}</td>
+      <td><b class="c-${x.status}">${fmt(x.price)}</b></td></tr>`;
+  let alt = "";
+  if (s.alt) {
+    const save = s.alt.save;
+    alt = `<div class="alt">${s.alt.dist.toFixed(1)}km 떨어진 <button type="button" data-id="${esc(s.alt.st.id)}">${esc(s.alt.st.name)}</button>에
+      ${s.alt.speed} 충전기(최대 ${Math.round(s.alt.kw)}kW)가 비어 있습니다. ${fmt(s.alt.price)}원/kWh${save > 0 ? `로, kWh당 ${save.toFixed(1)}원 쌉니다.` : save < 0 ? `로, 운영사 요금이 달라 kWh당 ${(-save).toFixed(1)}원 비싸지만 바로 충전할 수 있습니다.` : "입니다."}</div>`;
+  } else if (s.status === "혼잡" || s.status === "불가") {
+    alt = `<div class="alt">반경 ${state.p.rad}km 안에 같은 속도가 여유인 거점이 없습니다.</div>`;
+  }
+  el.innerHTML = `<button type="button" class="close" id="close-detail">닫기</button>
+    <h3 style="margin:0;font-size:17px">${esc(s.name)}</h3>
+    <p class="sub">${esc(s.facility)}, 주차 ${esc(s.parking)}, ${esc(s.busi)}</p>
+    <span class="chip s-${s.status}">${STATUS_LABEL[s.status]}</span>
+    <table class="calc num"><thead><tr><th>구분</th><th>대기</th><th>회원가</th><th>배수</th><th>동적 단가</th></tr></thead>
+      <tbody>${row("급속", s.fast)}${row("완속", s.slow)}</tbody></table>
+    ${priceNote(s)}
+    ${alt}
+    <p class="sub" style="margin-top:10px">${esc(s.addr)}</p>`;
+  el.hidden = false;
+}
+
+function renderPolicy() {
+  const p = state.p;
+  document.getElementById("th-o").textContent = Math.round(p.th * 100) + "% 이상";
+  document.getElementById("disc-o").textContent = Math.round(p.disc * 100) + "%";
+  document.getElementById("sur-o").textContent = Math.round(p.sur * 100) + "%";
+  document.getElementById("rad-o").textContent = p.rad + "km";
+  const tod = timeMult(state.hour, p).m;
+  const tiers = [["완속 7kW", 7], ["급속 50kW", 50], ["급속 100kW", 100], ["초급속 200kW", 200]];  // 공공(기후부) 단가 기준 예시
+  document.getElementById("ptable").innerHTML = `<thead><tr><th>원/kWh</th><th class="c-여유">여유</th><th class="c-보통">보통</th><th class="c-혼잡">혼잡</th></tr></thead><tbody>` +
+    tiers.map(([n, kw]) => `<tr><td>${n}</td>${["여유", "보통", "혼잡"].map(s => `<td class="c-${s}">${(publicRate(kw) * congestionMult(s, p) * tod).toFixed(1)}</td>`).join("")}</tr>`).join("") + "</tbody>";
+}
+
+const COLS = [
+  { key: "name", label: "충전소", get: s => s.name, cls: "name" },
+  { key: "status", label: "상태", get: s => STATUS.indexOf(s.status), show: s => `<span class="c-${s.status}">${STATUS_LABEL[s.status]}</span>` },
+  { key: "ratio", label: "대기율", get: s => s.ratio ?? -1, show: s => s.ratio == null ? "–" : Math.round(s.ratio * 100) + "%", r: 1 },
+  { key: "fast", label: "급속 대기", get: s => s.fast.total ? s.fast.avail / s.fast.total : -1, show: s => s.fast.total ? `${s.fast.avail}/${s.fast.total}` : "–", r: 1 },
+  { key: "fprice", label: "급속 단가", get: s => s.fast.price ?? 1e9, show: s => fmt(s.fast.price), r: 1 },
+  { key: "slow", label: "완속 대기", get: s => s.slow.total ? s.slow.avail / s.slow.total : -1, show: s => s.slow.total ? `${s.slow.avail}/${s.slow.total}` : "–", r: 1 },
+  { key: "sprice", label: "완속 단가", get: s => s.slow.price ?? 1e9, show: s => fmt(s.slow.price), r: 1 },
+  { key: "alt", label: "옮겨 갈 곳", get: s => s.alt ? s.alt.dist : 1e9, show: s => s.alt ? `${esc(s.alt.st.name)} (${s.alt.dist.toFixed(1)}km)` : "" },
+  { key: "busi", label: "운영기관", get: s => s.busi },
+];
+function renderTable() {
+  const q = state.q.trim().toLowerCase();
+  const col = COLS.find(c => c.key === state.sort.key);
+  const rows = state.view.list.filter(s => !q || s.name.toLowerCase().includes(q) || s.busi.toLowerCase().includes(q))
+    .sort((a, b) => { const x = col.get(a), y = col.get(b); return (x < y ? -1 : x > y ? 1 : 0) * state.sort.dir; });
+  const LIMIT = 400;
+  document.getElementById("stbl").innerHTML =
+    `<thead><tr>${COLS.map(c => `<th class="${c.r ? "r" : ""}" data-k="${c.key}" ${c.key === state.sort.key ? `aria-sort="${state.sort.dir > 0 ? "ascending" : "descending"}"` : ""}>${c.label}${c.key === state.sort.key ? (state.sort.dir > 0 ? " ▲" : " ▼") : ""}</th>`).join("")}</tr></thead>
+     <tbody>${rows.slice(0, LIMIT).map(s => `<tr data-id="${esc(s.id)}" class="${s.id === state.selected ? "on" : ""}">${COLS.map(c =>
+       `<td class="${c.r ? "r num" : ""} ${c.cls || ""}">${c.show ? c.show(s) : esc(c.get(s))}</td>`).join("")}</tr>`).join("")}
+     ${rows.length > LIMIT ? `<tr><td colspan="${COLS.length}" class="sub">${rows.length - LIMIT}곳 더 있음. 검색으로 좁혀 보세요.</td></tr>` : ""}
+     ${!rows.length ? `<tr><td colspan="${COLS.length}" class="sub">${q ? "검색 결과가 없습니다." : state.loading ? "충전기 데이터를 받는 중입니다." : "표시할 충전소가 없습니다."}</td></tr>` : ""}</tbody>`;
+}
+
+// 시간 막대 아래 눈금 (0·6·12·18·23시)
+function renderSpark() {
+  const el = d3.select("#spark"), W = Math.max(200, el.node().clientWidth || 600);
+  el.attr("viewBox", `0 0 ${W} 16`);
+  el.selectAll("*").remove();
+  const x = h => 8 + h * (W - 16) / 23;   // 슬라이더 손잡이 중심과 맞춤
+  [0, 6, 12, 18, 23].forEach(h => el.append("text").attr("class", "tick").attr("x", x(h)).attr("y", 12).text(h + "시"));
+}
+
+// ───────────────────────── 갱신 흐름 ─────────────────────────
+function refresh({ refit = false, spark = true } = {}) {
+  state.view = compute();
+  if (external() && state.hour === liveHour()) state.liveCongested = state.view.list.filter(s => s.status === "혼잡").length;
+  if (refit) fit();
+  drawMap(); renderSummary(); renderPairs(); renderDetail(); renderPolicy(); renderTable();
+  if (spark) renderSpark();
+  document.getElementById("hour-big").innerHTML = `${state.hour}<span>시</span>`;
+  document.getElementById("hour").value = state.hour;
+}
+function renderRegions() {
+  document.getElementById("regions").innerHTML = REGIONS.map(r =>
+    `<button type="button" data-code="${r.code}" aria-pressed="${r.code === state.region.code}">${r.name}</button>`).join("");
+  document.getElementById("reload").hidden = state.server !== "api";   // 정적 사이트(GitHub Pages)는 자동 갱신이라 숨김
+}
+function setRegion(r) {
+  state.region = r; state.selected = null;
+  renderRegions(); refresh({ refit: true });
+  if (state.server && !state.live[r.code]) loadLive(r);
+}
+// 아직 보여줄 데이터가 없을 때 지도 가운데와 요약에 띄울 말
+function emptyMsg() {
+  if (state.loading) return `${state.region.name} 충전기 데이터를 받는 중입니다`;
+  if (!state.server) return state.notice;
+  return `${state.region.name} 데이터를 받지 못했습니다. '새로 받기'를 눌러 다시 시도하세요`;
+}
+
+// ───────────────────────── 실시간 데이터 (server.py가 있을 때만) ─────────────────────────
+function setStatus(msg, isErr = false) {
+  const el = document.getElementById("status");
+  el.textContent = msg; el.classList.toggle("err", isErr);
+}
+// 정적 모드: GitHub Actions가 15분마다 만든 data/history/{code}.json 하나로 지금 상태와 기록을 모두 받음
+async function loadStatic(region) {
+  const res = await fetch(`data/history/${region.code}.json`, { cache: "no-store" });
+  if (res.status === 404) throw new Error(`${region.name}은 아직 수집된 기록이 없습니다.`);
+  if (!res.ok) throw new Error(`데이터 파일을 받지 못했습니다 (${res.status}).`);
+  const hist = await res.json();
+  const hours = Object.keys(hist.hours).map(Number);
+  if (!hours.length) throw new Error(`${region.name}은 아직 수집된 기록이 없습니다.`);
+  const h = Math.max(...hours), slot = hist.hours[h];
+  const first = !state.live[region.code];
+  state.history[region.code] = hist;
+  state.live[region.code] = { chargers: chargersFromHistory(hist, slot), hour: h, kind: "collected",
+                              when: `${hist.date} ${slot.t.slice(0, 2)}:${slot.t.slice(2)}` };
+  if (first && region.code === state.region.code) state.hour = h;
+  const mins = Math.round((Date.now() - Date.parse(`${hist.date}T${slot.t.slice(0, 2)}:${slot.t.slice(2)}:00+09:00`)) / 60000);
+  // 수집 지연 경고는 관리자 화면(주소 끝에 #admin)에서만. 방문자에게는 '수집 기준 시각'만 보인다.
+  if (!ADMIN || mins <= 120) return "";
+  return `[관리자] 마지막 수집이 ${mins >= 1440 ? Math.floor(mins / 1440) + "일" : Math.floor(mins / 60) + "시간"} 전입니다. 수집이 멈췄는지 확인이 필요합니다.`;
+}
+async function loadLive(region, force = false) {
+  state.loading = true;
+  if (region.code === state.region.code) { setStatus(""); state.live[region.code] ? renderSummary() : refresh(); }
+  document.getElementById("reload").disabled = true;
+  let msg = "", isErr = false;
+  if (state.server === "static") {
+    try { msg = await loadStatic(region); isErr = !!msg; }
+    catch (err) {
+      isErr = true; msg = err.message;
+    }
+    state.loading = false;
+    document.getElementById("reload").disabled = false;
+    if (region.code === state.region.code) { renderRegions(); refresh(); setStatus(msg, isErr); }
+    return;
+  }
+  try {
+    const res = await fetch(`api/chargers?region=${encodeURIComponent(region.name)}${force ? "&refresh=1" : ""}`, { cache: "no-store" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `서버가 ${res.status} 오류를 돌려줬습니다.`);
+    const first = !state.live[region.code];
+    state.live[region.code] = { rows: data.rows || [], when: data.fetched_at, kind: data.source === "live" ? "live" : "snapshot" };
+    msg = data.warning || "";
+    if (first && data.source === "live") state.hour = kstHour();
+    await loadHistory(region);
+  } catch (err) {
+    isErr = true;
+    msg = `실시간 데이터를 받지 못했습니다. ${err.message || ""}`.trim();
+  }
+  state.loading = false;
+  document.getElementById("reload").disabled = false;
+  if (region.code === state.region.code) { renderRegions(); refresh(); setStatus(msg, isErr); }
+}
+async function loadHistory(region) {
+  try {
+    const res = await fetch(`api/history?region=${encodeURIComponent(region.name)}`, { cache: "no-store" });
+    if (res.ok) state.history[region.code] = await res.json();
+  } catch (e) { /* 기록이 없어도 실시간 화면은 그대로 동작 */ }
+}
+// 서버에 키가 없을 때: 사이트(폰 포함)에서 한 번 입력 → 서버가 확인 후 저장 → 실제 데이터로 전환
+function setupKeyForm() {
+  const form = document.getElementById("key-box"), msg = document.getElementById("key-msg");
+  form.hidden = false;
+  form.addEventListener("submit", async e => {
+    e.preventDefault();
+    const key = document.getElementById("key-input").value.trim();
+    if (!key) { msg.textContent = "인증키를 붙여 넣어 주세요."; msg.classList.add("err"); return; }
+    const btn = document.getElementById("key-save");
+    btn.disabled = true; msg.classList.remove("err"); msg.textContent = "키를 확인하는 중입니다...";
+    try {
+      const res = await fetch("api/key", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `서버 오류 (${res.status})`);
+      form.hidden = true;
+      state.server = "api"; state.live = {}; state.history = {};
+      renderRegions(); refresh(); loadLive(state.region);
+      setStatus("실제 데이터로 바꿨습니다. 10분마다 기록도 쌓입니다.");
+    } catch (err) {
+      msg.textContent = err.message; msg.classList.add("err");
+    } finally { btn.disabled = false; }
+  });
+}
+// 폰·팀원용 주소 보여주기 (run.command가 만든 터널 주소). QR은 브라우저에서 직접 그림
+function setupShare(url) {
+  const btn = document.getElementById("share"), box = document.getElementById("share-box");
+  btn.hidden = false;
+  btn.addEventListener("click", async () => {
+    if (!box.hidden) { box.hidden = true; return; }
+    let qr = "";
+    if (window.qrcode) {
+      const q = qrcode(0, "M"); q.addData(url); q.make();
+      qr = `<img alt="폰 카메라로 찍으면 열리는 QR 코드" src="${q.createDataURL(6, 0)}">`;
+    }
+    box.innerHTML = `<span>폰·팀원은 이 주소로 열면 됩니다.${state.server === "static" ? "" : " 이 맥이 잠들거나 꺼지면 함께 꺼집니다."}</span>
+      <a href="${esc(url)}" target="_blank" rel="noopener">${esc(url)}</a>${qr}
+      <span><button type="button" class="file-btn" id="copy-url">주소 복사</button></span>`;
+    box.hidden = false;
+    document.getElementById("copy-url").addEventListener("click", e => {
+      navigator.clipboard?.writeText(url).then(() => { e.target.textContent = "복사됨"; }).catch(() => {});
+    });
+  });
+}
+async function getJSON(url) {
+  const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 4000);
+  try {
+    const res = await fetch(url, { signal: ctl.signal, cache: "no-store" });
+    if (!res.ok || !(res.headers.get("content-type") || "").includes("json")) return null;
+    return await res.json();
+  } catch (e) { return null; } finally { clearTimeout(t); }
+}
+// 데이터 출처 찾기: GitHub Pages 정적 데이터(data/status.json) → server.py(api/health). 둘 다 없으면 안내만 띄움
+async function detectServer() {
+  let refreshSec = 300;
+  const st = await getJSON("data/status.json");
+  if (st && st.ok) {
+    state.server = "static"; refreshSec = st.refresh_sec || 300;
+    if (!st.regions[state.region.code]) {   // 첫 화면 지역에 기록이 없으면 기록이 있는 지역으로
+      const r = REGIONS.find(x => st.regions[x.code]); if (r) state.region = r;
+    }
+  } else {
+    const h = await getJSON("api/health");
+    const stop = notice => { state.loading = false; state.notice = notice; refresh(); };
+    if (!h || !h.ok) return stop("서버에 연결되지 않았습니다. 맥에서 실행 파일(run.command)을 켠 뒤 그 주소로 열어 주세요");
+    if (h.public_url) setupShare(h.public_url);
+    if (!h.live) { setupKeyForm(); return stop("공공데이터포털 인증키를 '실제 데이터 켜기' 칸에 넣으면 실제 충전소 현황이 표시됩니다"); }
+    state.server = "api"; refreshSec = h.cache_ttl_sec || 300;
+  }
+  renderRegions(); refresh({ refit: true });
+  loadLive(state.region);
+  setInterval(() => { if (!document.hidden && !state.loading) loadLive(state.region); },
+              Math.max(60, refreshSec) * 1000);
+}
+function select(id) {
+  state.selected = id;
+  renderDetail(); renderTable(); drawSelection();
+  const s = state.view.list.find(x => x.id === id);
+  if (s) focusOn(s);
+}
+
+// ───────────────────────── 이벤트 ─────────────────────────
+document.getElementById("regions").addEventListener("click", e => {
+  const b = e.target.closest("button[data-code]"); if (b) setRegion(regionByCode.get(b.dataset.code));
+});
+document.getElementById("legend").addEventListener("click", e => {
+  const b = e.target.closest("button[data-s]"); if (!b) return;
+  const s = b.dataset.s; state.hidden.has(s) ? state.hidden.delete(s) : state.hidden.add(s);
+  drawMap(); renderSummary();
+});
+for (const b of ["pairs", "detail", "stbl"]) document.getElementById(b).addEventListener("click", e => {
+  if (e.target.id === "close-detail") { state.selected = null; renderDetail(); renderTable(); return; }
+  const th = e.target.closest("th[data-k]");
+  if (th) { const k = th.dataset.k; state.sort = { key: k, dir: state.sort.key === k ? -state.sort.dir : 1 }; renderTable(); return; }
+  const t = e.target.closest("[data-id]"); if (t) select(t.dataset.id);
+});
+const hourInput = document.getElementById("hour");
+hourInput.addEventListener("input", () => { state.hour = +hourInput.value; refresh(); });
+let timer = null;
+document.getElementById("play").addEventListener("click", e => {
+  const b = e.currentTarget;
+  if (timer) { clearInterval(timer); timer = null; b.setAttribute("aria-pressed", "false"); b.setAttribute("aria-label", "하루 재생"); b.title = "하루 재생"; b.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5v11l9.5-5.5z"/></svg>'; return; }
+  b.setAttribute("aria-pressed", "true"); b.setAttribute("aria-label", "멈춤"); b.title = "멈춤"; b.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 2.5h3v11h-3zM9.5 2.5h3v11h-3z"/></svg>';
+  timer = setInterval(() => { state.hour = (state.hour + 1) % 24; refresh(); }, 850);
+});
+for (const id of ["th", "disc", "sur", "rad"]) document.getElementById(id).addEventListener("input", e => { state.p[id] = +e.target.value; refresh(); });
+for (const id of ["tod", "lim"]) document.getElementById(id).addEventListener("change", e => { state.p[id] = e.target.checked; refresh(); });
+document.getElementById("q").addEventListener("input", e => { state.q = e.target.value; renderTable(); });
+document.getElementById("reload").addEventListener("click", () => loadLive(state.region, true));
+// ───────────────────────── 내 위치 ─────────────────────────
+// 브라우저 위치 권한으로 현재 위치를 찍고, 그 시·군으로 옮겨 가장 가까운 '여유' 충전소를 안내한다. 위치는 서버로 보내지 않는다.
+const meLayer = L.layerGroup().addTo(map);
+const meNote = document.getElementById("me-note");
+let meTimer = null;
+// 안내 창: 오른쪽 × 로 닫기. 오류·안내 문구는 6초 뒤 저절로 닫힘
+const showMe = (html, autoHide = false) => {
+  clearTimeout(meTimer);
+  meNote.innerHTML = html ? `<span>${html}</span><button type="button" class="me-close" aria-label="닫기">×</button>` : "";
+  meNote.hidden = !html;
+  if (html && autoHide) meTimer = setTimeout(() => showMe(""), 6000);
+};
+let mePos = null;
+function nearestFree(pos) {
+  let best = null, bd = Infinity;
+  for (const s of state.view?.list || []) {
+    if (s.status !== "여유") continue;
+    const d = haversine(pos, s); if (d < bd) { bd = d; best = s; }
+  }
+  return best ? { s: best, d: bd } : null;
+}
+function afterLoaded(fn, tries = 40) {   // 지역 데이터를 받을 때까지 기다렸다가 실행 (최대 약 10초)
+  if (!state.loading && state.view?.list?.length) return fn();
+  if (tries > 0) setTimeout(() => afterLoaded(fn, tries - 1), 250); else fn();
+}
+function placeMe(pos, acc) {
+  meLayer.clearLayers();
+  if (acc && acc < 2000) meLayer.addLayer(L.circle([pos.lat, pos.lng], { radius: acc, color: "#2a7de1", weight: 1, fillOpacity: 0.08, interactive: false }));
+  meLayer.addLayer(L.marker([pos.lat, pos.lng], { keyboard: false, icon: L.divIcon({ className: "", html: '<div class="me-dot"></div>', iconSize: [0, 0] }) })
+    .bindTooltip("내 위치", { direction: "top", offset: [0, -10], className: "dtip" }));
+}
+function guideFromMe() {
+  const n = nearestFree(mePos);
+  if (!n) { map.setView([mePos.lat, mePos.lng], 14, { animate: !reduced }); showMe(`${esc(state.region.name)}에 지금 '여유' 충전소가 없습니다.`, true); return; }
+  map.fitBounds(L.latLngBounds([[mePos.lat, mePos.lng], [n.s.lat, n.s.lng]]), { padding: [60, 60], maxZoom: 16, animate: !reduced });
+  const price = n.s.price != null ? `, ${n.s.price.toFixed(1)}원/kWh` : "";
+  showMe(`가장 가까운 여유 충전소: <button type="button" data-id="${esc(n.s.id)}">${esc(n.s.name)}</button> (${n.d < 1 ? Math.round(n.d * 1000) + "m" : n.d.toFixed(1) + "km"}${price})`);
+}
+document.getElementById("zme").addEventListener("click", () => {
+  if (!navigator.geolocation) { showMe("이 브라우저는 위치 기능을 지원하지 않습니다.", true); return; }
+  showMe("현재 위치를 찾는 중입니다…");
+  navigator.geolocation.getCurrentPosition(p => {
+    mePos = { lat: p.coords.latitude, lng: p.coords.longitude };
+    placeMe(mePos, p.coords.accuracy);
+    const f = GEO.features.find(f => d3.geoContains(f, [mePos.lng, mePos.lat]));
+    if (!f) { map.setView([mePos.lat, mePos.lng], 11, { animate: !reduced }); showMe("현재 위치가 충청북도 밖이라 가까운 충전소를 안내할 수 없습니다.", true); return; }
+    if (f.properties.zscode !== state.region.code) setRegion(regionByCode.get(f.properties.zscode));
+    afterLoaded(guideFromMe);
+  }, err => {
+    showMe(err.code === 1 ? "위치 권한이 꺼져 있습니다. 브라우저(또는 휴대폰 설정)에서 이 사이트의 위치 접근을 허용해 주세요."
+                          : "현재 위치를 찾지 못했습니다. 잠시 후 다시 눌러 주세요.", true);
+  }, { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 });
+});
+meNote.addEventListener("click", e => {
+  if (e.target.closest(".me-close")) { showMe(""); return; }
+  const t = e.target.closest("[data-id]"); if (t) select(t.dataset.id);
+});
+
+document.getElementById("zin").addEventListener("click", () => map.zoomIn());
+document.getElementById("zout").addEventListener("click", () => map.zoomOut());
+document.getElementById("zfit").addEventListener("click", () => fitRegion(true));
+
+let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => { map.invalidateSize(); renderSpark(); }, 150); });
+
+renderRegions();
+refresh({ refit: true });
+detectServer();
+})();
+</script>
