@@ -1,0 +1,98 @@
+{
+ "features": [
+  "hour",
+  "hour_sin",
+  "hour_cos",
+  "day_of_week",
+  "is_weekend",
+  "is_rush_hour",
+  "util_now",
+  "util_lag_1",
+  "util_lag_2",
+  "util_lag_24",
+  "util_lag_168",
+  "util_mean_3h"
+ ],
+ "best_iteration": 311,
+ "split": {
+  "train": "2025-01~10 (서울)",
+  "valid": "2025-11 (서울)",
+  "test": "2025-12 (서울)"
+ },
+ "seoul_test_full": {
+  "n": 158259,
+  "model": {
+   "MAE": 0.0871,
+   "RMSE": 0.1681
+  },
+  "baseline_mean": {
+   "MAE": 0.1302,
+   "RMSE": 0.2257
+  },
+  "baseline_persistence": {
+   "MAE": 0.0884,
+   "RMSE": 0.2082
+  },
+  "baseline_hour_mean": {
+   "MAE": 0.1273,
+   "RMSE": 0.2238
+  }
+ },
+ "seoul_test_sparse": {
+  "n": 158259,
+  "model": {
+   "MAE": 0.0891,
+   "RMSE": 0.172
+  },
+  "baseline_mean": {
+   "MAE": 0.1302,
+   "RMSE": 0.2257
+  },
+  "baseline_persistence": {
+   "MAE": 0.0884,
+   "RMSE": 0.2082
+  },
+  "baseline_hour_mean": {
+   "MAE": 0.1273,
+   "RMSE": 0.2238
+  }
+ },
+ "chungbuk": {
+  "n": 80008,
+  "model": {
+   "MAE": 0.1166,
+   "RMSE": 0.2301
+  },
+  "baseline_mean": {
+   "MAE": 0.1719,
+   "RMSE": 0.2994
+  },
+  "baseline_persistence": {
+   "MAE": 0.091,
+   "RMSE": 0.2516
+  },
+  "baseline_hour_mean": {
+   "MAE": 0.1811,
+   "RMSE": 0.2952
+  },
+  "period": [
+   "2026-10-15 11:41:00",
+   "2026-10-20 17:28:00"
+  ],
+  "stations": 2154
+ },
+ "importance": {
+  "util_now": 0.775,
+  "util_mean_3h": 0.073,
+  "util_lag_1": 0.057,
+  "util_lag_168": 0.028,
+  "util_lag_24": 0.025,
+  "util_lag_2": 0.02,
+  "hour_cos": 0.009,
+  "hour": 0.005,
+  "hour_sin": 0.004,
+  "day_of_week": 0.003,
+  "is_rush_hour": 0.001,
+  "is_weekend": 0.0
+ }
+}

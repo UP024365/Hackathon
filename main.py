@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
+import math
 import folium
+from folium.plugins import PolyLineTextPath
 from streamlit_folium import st_folium
 from utils.api import fetch_charging_stations
 
@@ -146,6 +148,31 @@ else:
 
     summary_df = pd.DataFrame(grouped_stations)
 
+    # 혼잡 분산 안내: 혼잡(빨강)·불가(회색) 거점 → 반경 안 가장 가까운 여유(초록) 거점
+    REDIRECT_RADIUS_KM = 3.0
+
+    def haversine_km(lat1, lng1, lat2, lng2):
+        r = math.radians
+        a = math.sin(r(lat2 - lat1) / 2) ** 2 + math.cos(r(lat1)) * math.cos(r(lat2)) * math.sin(r(lng2 - lng1) / 2) ** 2
+        return 6371.0 * 2 * math.asin(math.sqrt(a))
+
+    redirects = []
+    if not summary_df.empty:
+        greens = summary_df[summary_df['color'] == 'green']
+        for _, src in summary_df[summary_df['color'].isin(['red', 'gray'])].iterrows():
+            # 급속 수요는 급속 여유 거점으로, 완속 수요는 완속 여유 거점으로
+            need_fast = src['fast_total'] > 0
+            cand = greens[greens['fast_avail'] > 0] if need_fast else greens[greens['slow_avail'] > 0]
+            best, best_d = None, float('inf')
+            for _, dst in cand.iterrows():
+                if dst['statId'] == src['statId']:
+                    continue
+                d = haversine_km(src['lat'], src['lng'], dst['lat'], dst['lng'])
+                if d < best_d:
+                    best, best_d = dst, d
+            if best is not None and best_d <= REDIRECT_RADIUS_KM:
+                redirects.append((src, best, best_d, '급속' if need_fast else '완속'))
+
     # 4. 레이아웃 분할
     col1, col2 = st.columns([7, 3])
 
@@ -178,7 +205,17 @@ else:
                     icon=folium.Icon(color=row['color'], icon='bolt', prefix='fa')
                 ).add_to(m)
                 
+            for src, dst, dist, speed in redirects:
+                line = folium.PolyLine(
+                    [[src['lat'], src['lng']], [dst['lat'], dst['lng']]],
+                    color='#1f2937', weight=3, opacity=0.9, dash_array='7 5',
+                    tooltip=f"{src['statNm']} → {dst['statNm']} ({speed}, {dist:.1f}km)",
+                ).add_to(m)
+                PolyLineTextPath(line, '  ►  ', repeat=True, offset=5,
+                                 attributes={'fill': '#1f2937', 'font-size': '14'}).add_to(m)
+
             st_folium(m, width="100%", height=430)
+            st.caption(f"➡ 점선 화살표: 혼잡·불가 거점에서 반경 {REDIRECT_RADIUS_KM:.0f}km 안의 가장 가까운 여유 거점으로 안내 ({len(redirects)}건)")
 
         st.subheader("📋 충전소 거점별 상세 및 동적 요금 현황")
         # 'fast', 'slow' 대신 새로 정의한 컬럼명 사용
