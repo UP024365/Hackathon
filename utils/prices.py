@@ -1,20 +1,21 @@
 """
-운영사별 실제 충전요금(원/kWh) — data/operator_prices.csv
+운영사별 실제 충전요금(원/kWh) 및 AI 모델 기반 리워드 산정 모듈
 
-공공 API(getChargerInfo)에는 요금이 없으므로, 무공해차 통합누리집(ev.or.kr) '사업자별 요금 매트릭스'의
-운영사 × 출력 구간 단가를 충전기의 운영기관(busiNm)·출력(output)과 연결한다.
-통합누리집도 '충전소 요금은 운영 사업자의 용량 구간별 단가'로 안내하므로, 이 연결이 곧 충전소별 요금이다.
-
-찾는 순서
-  1) 운영사의 해당 출력 구간 단가             → source "운영사"
-  2) 그 구간이 비어 있으면 같은 운영사의 가장 가까운 구간 → source "운영사(인접 구간)"
-  3) 운영사가 표에 없거나 단가가 하나도 없으면 공공(기후에너지환경부) 단가 → source "공공 기준(미등재)"
+1. data/operator_prices.csv에서 운영사 × 출력 구간 단가를 조회합니다.
+2. models/lgbm_congestion_model.pkl을 로드하여 1시간 뒤 예상 이용률을 예측하고,
+   예상 혼잡도가 낮을수록 더 큰 리워드(할인율)를 부여합니다. (할증 없음)
 """
 from __future__ import annotations
 
 import csv
+import os
 import re
 from functools import lru_cache
+from pathlib import Path
+
+import joblib
+import numpy as np
+import pandas as pd
 
 import config
 
@@ -23,7 +24,7 @@ TIER_UPPER = (30, 50, 100, 200, float("inf"))          # 완속 / 중속 / 급�
 TIER_LABELS = ("완속(30kW 미만)", "중속(30~49kW)", "급속(50~99kW)", "급속(100~199kW)", "초급속(200kW 이상)")
 PUBLIC = "기후에너지환경부"
 
-# API의 운영기관명 → 요금표 운영사명 (정규화 후 기준). 표기만 다른 같은 회사.
+# API의 운영기관명 → 요금표 운영사명 (정규화 후 기준)
 ALIASES = {
     "기후부": PUBLIC, "환경부": PUBLIC, "한국환경공단": PUBLIC,
     "한국전력": "한국전력공사",
@@ -32,15 +33,80 @@ ALIASES = {
     "파워큐브코리아": "파워큐브",
     "HUMAXEV": "휴맥스이브이", "휴맥스EV": "휴맥스이브이",
     "이브이시": "이브이시스",
-    "파킹클라우드": "아이파킹",          # 아이파킹 앱·브랜드 운영사 (SK E&S 자회사)
+    "파킹클라우드": "아이파킹",
     "스타코프스타코프": "스타코프",
 }
 
+# ─────────────────────────────────────────────────────────────
+# 1. AI 혼잡도 예측 모델 로딩 및 리워드 계산 함수
+# ─────────────────────────────────────────────────────────────
+MODEL_PATH = config.ROOT / "models" / "lgbm_congestion_model.pkl"
+_MODEL = None
 
+def get_model():
+    """모델이 로컬에 있으면 로드하여 캐시 반환"""
+    global _MODEL
+    if _MODEL is None and MODEL_PATH.exists():
+        try:
+            _MODEL = joblib.load(MODEL_PATH)
+        except Exception:
+            _MODEL = None
+    return _MODEL
+
+
+def predict_utilization_1h(hour: int, day_of_week: int, current_stat: int = 3,
+                           output: float = 50.0, zcode: int = 43,
+                           parking_free: int = 1, current_util: float = 0.5) -> float:
+    """LightGBM 모델의 학습 피처 명세에 맞춰 1시간 뒤 예상 이용률(0.0 ~ 1.0)을 예측합니다."""
+    model = get_model()
+    if model is None:
+        return current_util
+
+    hour_sin = np.sin(2 * np.pi * hour / 24.0)
+    hour_cos = np.cos(2 * np.pi * hour / 24.0)
+    is_weekend = 1 if day_of_week >= 5 else 0
+    is_rush_hour = 1 if hour in [8, 9, 18, 19] else 0
+
+    feature_dict = {
+        'hour': [hour],
+        'hour_sin': [hour_sin],
+        'hour_cos': [hour_cos],
+        'day_of_week': [day_of_week],
+        'is_weekend': [is_weekend],
+        'is_rush_hour': [is_rush_hour],
+        'current_stat': [current_stat],
+        'output': [output],
+        'zcode': [zcode],
+        'parkingFree': [parking_free],
+        'util_lag_1': [current_util],
+        'util_rolling_mean_3': [current_util]
+    }
+    features_df = pd.DataFrame(feature_dict)
+    pred = float(model.predict(features_df)[0])
+    return float(np.clip(pred, 0.0, 1.0))
+
+
+def calculate_reward_rate(pred_util: float, default_discount: float = 0.20) -> float:
+    """
+    1시간 후 예상 이용률에 따른 리워드(할인율) 산정
+    - 이용률이 낮아 한산할수록 높은 리워드(할인) 부여
+    - 혼잡할 경우 할증 없이 0.0 (기본요금 유지)
+    """
+    if pred_util < 0.3:
+        return 0.30  # 매우 한산: 30% 리워드
+    elif pred_util < 0.6:
+        return default_discount  # 보통/여유: 기본 리워드 (예: 20%)
+    else:
+        return 0.0  # 혼잡 예상: 리워드 없음 (할증 배제)
+
+
+# ─────────────────────────────────────────────────────────────
+# 2. 운영사별 요금표 조회 로직
+# ─────────────────────────────────────────────────────────────
 def normalize(name: str) -> str:
     s = str(name or "")
     s = re.sub(r"\(주\)|㈜|주식회사|\(유\)|유한회사", "", s)
-    s = re.sub(r"\([^)]*\)", "", s)          # 파워큐브(SP), 타디스테크놀로지(evPlug)
+    s = re.sub(r"\([^)]*\)", "", s)
     s = re.sub(r"\s+", "", s).upper()
     return ALIASES.get(s, s)
 
@@ -52,7 +118,6 @@ def _num(v: str):
 
 @lru_cache(maxsize=1)
 def table() -> dict:
-    """{정규화 운영사명: {"name", "member": [5], "nonmember": [5], "updated", "source"}}"""
     out = {}
     with open(PRICE_FILE, encoding="utf-8") as f:
         for r in csv.DictReader(f):
@@ -63,7 +128,6 @@ def table() -> dict:
                 "nonmember": [_num(r[c]) for c in ("비회원_완속", "비회원_중속", "비회원_급속50", "비회원_급속100", "비회원_초급속200")],
                 "updated": r["갱신일"], "source": r.get("출처", ""),
             }
-    # 별칭 대상이 표에 있는지 확인 (오타 방지)
     for target in set(ALIASES.values()):
         assert normalize(target) in out, f"별칭 대상 '{target}'이 요금표에 없습니다"
     return out
@@ -77,7 +141,6 @@ def tier_index(kw: float) -> int:
 
 
 def _pick(values: list, i: int):
-    """i 구간 단가. 비어 있으면 가장 가까운 구간(같은 거리면 낮은 구간)."""
     if values[i] is not None:
         return values[i], True
     for d in range(1, len(values)):
@@ -88,7 +151,6 @@ def _pick(values: list, i: int):
 
 
 def lookup(busi: str, kw: float, member: bool = True) -> tuple[float | None, str, str]:
-    """(단가, 출처 구분, 요금표 운영사명). 비회원가는 미등재면 None."""
     t = table()
     i = tier_index(kw if kw and kw > 0 else 7.0)
     kind = "member" if member else "nonmember"
@@ -107,7 +169,6 @@ def member_rate(busi: str, kw: float) -> float:
 
 
 def web_payload() -> dict:
-    """웹 페이지에 넣을 요금표 (JS에서 같은 규칙으로 찾도록 별칭·구간도 함께)."""
     return {
         "tiers": [u if u != float("inf") else None for u in TIER_UPPER],
         "aliases": ALIASES,
