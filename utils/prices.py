@@ -10,6 +10,7 @@ from __future__ import annotations
 import csv
 import os
 import re
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 
@@ -40,8 +41,10 @@ ALIASES = {
 # ─────────────────────────────────────────────────────────────
 # 1. AI 혼잡도 예측 모델 로딩 및 리워드 계산 함수
 # ─────────────────────────────────────────────────────────────
-MODEL_PATH = config.ROOT / "models" / "lgbm_congestion_model.pkl"
+MODEL_PATH = config.ROOT / "models" / "lgbm_congestion_model2.pkl"   # training/train_model.py가 만듦
 _MODEL = None
+LAGS = (1, 2, 24, 168)   # 학습 때와 같은 '몇 시간 전 이용률' 피처
+
 
 def get_model():
     """모델이 로컬에 있으면 로드하여 캐시 반환"""
@@ -54,36 +57,39 @@ def get_model():
     return _MODEL
 
 
-def predict_utilization_1h(hour: int, day_of_week: int, current_stat: int = 3,
-                           output: float = 50.0, zcode: int = 43,
-                           parking_free: int = 1, current_util: float = 0.5) -> float:
-    """LightGBM 모델의 학습 피처 명세에 맞춰 1시간 뒤 예상 이용률(0.0 ~ 1.0)을 예측합니다."""
+def predict_utilization_1h_batch(current_util, when: datetime, lags: dict | None = None) -> np.ndarray:
+    """
+    여러 충전소의 1시간 뒤 예상 이용률(0~1)을 한 번에 예측.
+    - current_util: 충전소별 현재 이용률 = 충전중 / (대기 + 충전중)
+    - when: 현재 시각 (KST)
+    - lags: {1: [...], 2: [...], 24: [...], 168: [...]} 몇 시간 전 이용률. 모르면 생략 (NaN 처리)
+    모델 파일이 없으면 현재 이용률을 그대로 돌려준다.
+    """
+    cur = np.asarray(current_util, dtype=float)
     model = get_model()
-    if model is None:
-        return current_util
+    if model is None or cur.size == 0:
+        return cur
+    n = cur.size
+    lags = lags or {}
+    df = pd.DataFrame({
+        "hour": when.hour,
+        "hour_sin": np.sin(2 * np.pi * when.hour / 24),
+        "hour_cos": np.cos(2 * np.pi * when.hour / 24),
+        "day_of_week": when.weekday(),
+        "is_weekend": int(when.weekday() >= 5),
+        "is_rush_hour": int(when.hour in (8, 9, 18, 19)),
+        "util_now": cur,
+    }, index=range(n))
+    for h in LAGS:
+        df[f"util_lag_{h}"] = np.asarray(lags.get(h, np.full(n, np.nan)), dtype=float)
+    df["util_mean_3h"] = df[["util_now", "util_lag_1", "util_lag_2"]].mean(axis=1, skipna=True)
+    return np.clip(model.predict(df[list(model.feature_name_)]), 0.0, 1.0)
 
-    hour_sin = np.sin(2 * np.pi * hour / 24.0)
-    hour_cos = np.cos(2 * np.pi * hour / 24.0)
-    is_weekend = 1 if day_of_week >= 5 else 0
-    is_rush_hour = 1 if hour in [8, 9, 18, 19] else 0
 
-    feature_dict = {
-        'hour': [hour],
-        'hour_sin': [hour_sin],
-        'hour_cos': [hour_cos],
-        'day_of_week': [day_of_week],
-        'is_weekend': [is_weekend],
-        'is_rush_hour': [is_rush_hour],
-        'current_stat': [current_stat],
-        'output': [output],
-        'zcode': [zcode],
-        'parkingFree': [parking_free],
-        'util_lag_1': [current_util],
-        'util_rolling_mean_3': [current_util]
-    }
-    features_df = pd.DataFrame(feature_dict)
-    pred = float(model.predict(features_df)[0])
-    return float(np.clip(pred, 0.0, 1.0))
+def predict_utilization_1h(current_util: float, when: datetime, lags: dict | None = None) -> float:
+    """충전소 한 곳의 1시간 뒤 예상 이용률."""
+    one = {h: [v] for h, v in (lags or {}).items()}
+    return float(predict_utilization_1h_batch([current_util], when, one)[0])
 
 
 def calculate_reward_rate(pred_util: float, default_discount: float = 0.20) -> float:
